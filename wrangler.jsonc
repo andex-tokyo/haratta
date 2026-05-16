@@ -5,13 +5,19 @@
   "compatibility_date": "2024-12-30",
   "workers_dev": true,
   "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "haratta.andex.tokyo",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
   "vars": {
-    "APP_BASE_URL": "https://haratta.tsuchida.workers.dev"
+    "APP_BASE_URL": "https://haratta.andex.tokyo"
   },
   "d1_databases": [
     {
