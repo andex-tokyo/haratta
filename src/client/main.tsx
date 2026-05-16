@@ -169,18 +169,6 @@ function saveRecentGroup(group: Pick<Group, "publicToken" | "name">) {
   localStorage.setItem("haratta:recent-groups", JSON.stringify(next));
 }
 
-function groupTokenFromInput(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  try {
-    const url = new URL(trimmed);
-    const parts = url.pathname.split("/").filter(Boolean);
-    return parts[0] === "g" ? parts[1] ?? "" : "";
-  } catch {
-    return trimmed.replace(/^\/?g\//, "");
-  }
-}
-
 function App() {
   const [route, setRoute] = useState(path());
   useEffect(() => {
@@ -255,13 +243,6 @@ function inputClass() {
 }
 
 function Home() {
-  const [groupInput, setGroupInput] = useState("");
-  const [recent, setRecent] = useState<RecentGroup[]>(() => recentGroups());
-  function openGroup(event: FormEvent) {
-    event.preventDefault();
-    const token = groupTokenFromInput(groupInput);
-    if (token) go(`/g/${token}`);
-  }
   return (
     <Shell>
       <section className="flex min-h-[72vh] flex-col justify-between gap-8">
@@ -292,25 +273,6 @@ function Home() {
             <Users size={18} /> グループ一覧を見る
           </Button>
         </div>
-        <form className="grid gap-2 rounded-lg border border-line bg-white p-4 shadow-soft" onSubmit={openGroup}>
-          <Field label="作成済みグループを開く" hint="グループURL、または /g/ の後ろのトークンを貼り付けます。">
-            <div className="grid grid-cols-[1fr_auto] gap-2">
-              <input className={inputClass()} value={groupInput} onChange={(e) => setGroupInput(e.target.value)} placeholder="https://haratta.andex.tokyo/g/..." />
-              <Button type="submit" variant="secondary">開く</Button>
-            </div>
-          </Field>
-          {recent.length ? (
-            <div className="mt-2 grid gap-2">
-              <p className="text-xs font-bold text-ink/50">最近開いたグループ</p>
-              {recent.map((item) => (
-                <button key={item.token} type="button" className="focus-ring flex items-center justify-between rounded-lg bg-paper px-3 py-2 text-left text-sm" onClick={() => go(`/g/${item.token}`)}>
-                  <span className="truncate font-bold">{item.name}</span>
-                  <ChevronRight size={16} />
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </form>
       </section>
     </Shell>
   );
