@@ -158,6 +158,15 @@ function slackMention(member: Pick<EventMemberRow, "name" | "slack_user_id">) {
   return member.slack_user_id ? `<@${member.slack_user_id}>` : member.name;
 }
 
+function yenText(amount: number) {
+  return `${amount.toLocaleString("ja-JP")}円`;
+}
+
+function slackPaymentLine(member: Pick<EventMemberRow, "name" | "slack_user_id" | "amount">) {
+  const person = member.slack_user_id ? `<@${member.slack_user_id}>` : member.name;
+  return `${person} ${yenText(member.amount)}`;
+}
+
 async function getSlackDestination(db: D1Database, eventId: string) {
   return db
     .prepare(
@@ -848,7 +857,10 @@ app.post("/api/groups/:groupToken/events", async (c) => {
     "initial",
     parsedAmounts
       .filter((member) => member.amount > 0)
-      .map((member) => (member.slackUserId ? `<@${member.slackUserId}>` : member.name))
+      .map((member) => {
+        const person = member.slackUserId ? `<@${member.slackUserId}>` : member.name;
+        return `${person} ${yenText(member.amount)}`;
+      })
   );
 
   return c.json({ id: eventId, publicToken: token, url: `/e/${token}` }, 201);
@@ -921,16 +933,16 @@ async function runDailyReminders(env: Bindings) {
   for (const event of events) {
     const unpaid = (
       await env.DB.prepare(
-        "SELECT name, slack_user_id FROM event_members WHERE event_id = ? AND amount > 0 AND status = 'unpaid' ORDER BY created_at ASC"
+        "SELECT name, slack_user_id, amount FROM event_members WHERE event_id = ? AND amount > 0 AND status = 'unpaid' ORDER BY created_at ASC"
       )
         .bind(event.id)
-        .all<Pick<EventMemberRow, "name" | "slack_user_id">>()
+        .all<Pick<EventMemberRow, "name" | "slack_user_id" | "amount">>()
     ).results;
     await notifyEvent(
       env,
       event,
       "daily_reminder",
-      unpaid.map(slackMention)
+      unpaid.map(slackPaymentLine)
     );
   }
 }

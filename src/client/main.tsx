@@ -1205,41 +1205,47 @@ function EventPage({ token }: { token: string }) {
                     <ExternalLink size={18} /> PayPayで支払う
                   </a>
                 ) : null}
-                {member.paypayLink ? <p className="text-sm font-bold text-ink/70">リンクが使えない場合</p> : null}
-                {event.paypayInfo ? (
-                  <div className="rounded-lg bg-paper p-3">
-                    <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
-                      <CreditCard size={14} /> PayPay送金先情報
-                    </p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.paypayInfo}`}</p>
-                  </div>
-                ) : null}
-                {event.bankInfo ? (
-                  <div className="rounded-lg bg-paper p-3">
-                    <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
-                      <Building2 size={14} /> 振込先情報
-                    </p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.bankInfo}`}</p>
-                  </div>
-                ) : null}
-                <div className="grid grid-cols-2 gap-2">
-                  {event.paypayInfo ? (
-                    <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.paypayInfo}`)}>
-                      <Clipboard size={18} /> PayPay情報
-                    </Button>
-                  ) : null}
-                  {event.bankInfo ? (
-                    <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.bankInfo}`)}>
-                      <Clipboard size={18} /> 振込先
-                    </Button>
-                  ) : null}
-                  <Button variant="secondary" onClick={() => navigator.clipboard.writeText(String(member.amount))}>
-                    <Clipboard size={18} /> {yen.format(member.amount)}円
-                  </Button>
-                </div>
                 <Button onClick={() => update(member.id, "paid")}>
                   <Check size={18} /> 支払いました
                 </Button>
+                <details className="rounded-lg bg-paper p-3">
+                  <summary className="cursor-pointer text-sm font-bold text-ink/70">
+                    {member.paypayLink ? "リンクが使えない場合" : "支払い先を見る"}
+                  </summary>
+                  <div className="mt-3 grid gap-3">
+                    {event.paypayInfo ? (
+                      <div className="rounded-lg bg-white p-3">
+                        <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
+                          <CreditCard size={14} /> PayPay送金先情報
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.paypayInfo}`}</p>
+                      </div>
+                    ) : null}
+                    {event.bankInfo ? (
+                      <div className="rounded-lg bg-white p-3">
+                        <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
+                          <Building2 size={14} /> 振込先情報
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.bankInfo}`}</p>
+                      </div>
+                    ) : null}
+                    <div className="grid grid-cols-2 gap-2">
+                      {event.paypayInfo ? (
+                        <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.paypayInfo}`)}>
+                          <Clipboard size={18} /> PayPay情報
+                        </Button>
+                      ) : null}
+                      {event.bankInfo ? (
+                        <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.bankInfo}`)}>
+                          <Clipboard size={18} /> 振込先
+                        </Button>
+                      ) : null}
+                      <Button variant="secondary" onClick={() => navigator.clipboard.writeText(String(member.amount))}>
+                        <Clipboard size={18} /> {yen.format(member.amount)}円
+                      </Button>
+                    </div>
+                  </div>
+                </details>
               </>
             ) : null}
             {member.amount > 0 && member.status === "paid" ? (
