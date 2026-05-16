@@ -188,8 +188,8 @@ function App() {
 
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <main className="min-h-screen bg-paper">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-5 sm:px-6 sm:py-8">
+    <main className="min-h-screen overflow-x-hidden bg-paper">
+      <div className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-5 px-4 py-5 sm:px-6 sm:py-8">
         {children}
       </div>
     </main>
@@ -212,7 +212,7 @@ function Button({
   };
   return (
     <button
-      className={`focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${styles[variant]} ${className}`}
+      className={`focus-ring inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${styles[variant]} ${className}`}
       {...props}
     >
       {children}
@@ -230,16 +230,16 @@ function Field({
   hint?: string;
 }) {
   return (
-    <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
+    <label className="flex min-w-0 flex-col gap-2 text-sm font-semibold text-ink">
       {label}
       {children}
-      {hint ? <span className="text-xs font-normal text-ink/60">{hint}</span> : null}
+      {hint ? <span className="min-w-0 text-xs font-normal leading-5 text-ink/60">{hint}</span> : null}
     </label>
   );
 }
 
 function inputClass() {
-  return "focus-ring min-h-11 rounded-lg border border-line bg-white px-3 py-2 text-base text-ink placeholder:text-ink/40";
+  return "focus-ring min-h-11 w-full min-w-0 rounded-lg border border-line bg-white px-3 py-2 text-base text-ink placeholder:text-ink/40";
 }
 
 function Home() {
@@ -521,7 +521,7 @@ function NewGroup() {
           ) : form.slackDestinationId ? (
             <p className="rounded-lg bg-paper p-3 text-sm text-ink/60">Bot token未設定、またはSlackユーザーを取得できません。手入力で追加できます。</p>
           ) : null}
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
             <input className={inputClass()} placeholder="Slackにいない人の名前" value={manualName} onChange={(e) => setManualName(e.target.value)} />
             <Button type="button" variant="secondary" onClick={addManualMember}>
               <Plus size={18} />
@@ -836,7 +836,7 @@ function EventWizard({
                 </div>
               </details>
             ) : null}
-            <div className="grid grid-cols-[1fr_auto] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
               <input className={inputClass()} placeholder="今回だけ追加する人" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
               <Button type="button" variant="secondary" onClick={addManualExtra}>
                 <Plus size={18} />
@@ -1111,13 +1111,13 @@ function GroupManage({
             </div>
           </details>
         ) : null}
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
           <input className={inputClass()} placeholder="Slackにいない人の名前" value={manualName} onChange={(e) => setManualName(e.target.value)} />
           <Button type="button" variant="secondary" onClick={addManualMember}><Plus size={18} /></Button>
         </div>
         <div className="grid gap-2">
           {members.map((member) => (
-            <div key={member.key} className="grid grid-cols-[1fr_auto] gap-2 rounded-lg bg-paper p-2">
+            <div key={member.key} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-lg bg-paper p-2">
               <input className={inputClass()} value={member.name} onChange={(e) => setMembers((current) => current.map((item) => item.key === member.key ? { ...item, name: e.target.value } : item))} />
               <Button type="button" variant="danger" onClick={() => setMembers((current) => current.filter((item) => item.key !== member.key))}><Trash2 size={18} /></Button>
             </div>
