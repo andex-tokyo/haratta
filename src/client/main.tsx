@@ -59,6 +59,15 @@ type Group = {
   }[];
 };
 
+type GroupListItem = {
+  publicToken: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  memberCount: number;
+  eventCount: number;
+};
+
 type RecentGroup = {
   token: string;
   name: string;
@@ -182,6 +191,7 @@ function App() {
 
   if (route === "/slack-destinations") return <SlackDestinations />;
   if (route === "/slack-destinations/new") return <NewSlackDestination />;
+  if (route === "/groups") return <GroupsList />;
   if (route === "/groups/new") return <NewGroup />;
   if (route.startsWith("/g/")) return <GroupDetail token={route.split("/")[2]} />;
   if (route.startsWith("/e/")) return <EventPage token={route.split("/")[2]} />;
@@ -278,6 +288,9 @@ function Home() {
           <Button variant="ghost" onClick={() => go("/slack-destinations")} className="sm:col-span-2">
             通知先一覧を見る
           </Button>
+          <Button variant="secondary" onClick={() => go("/groups")} className="sm:col-span-2">
+            <Users size={18} /> グループ一覧を見る
+          </Button>
         </div>
         <form className="grid gap-2 rounded-lg border border-line bg-white p-4 shadow-soft" onSubmit={openGroup}>
           <Field label="作成済みグループを開く" hint="グループURL、または /g/ の後ろのトークンを貼り付けます。">
@@ -324,6 +337,45 @@ function SlackDestinations() {
       </div>
       <Button onClick={() => go("/slack-destinations/new")}>
         <Plus size={18} /> 通知先を追加
+      </Button>
+    </Shell>
+  );
+}
+
+function GroupsList() {
+  const [items, setItems] = useState<GroupListItem[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<GroupListItem[]>("/api/groups").then(setItems).catch((e) => setError(e.message));
+  }, []);
+
+  return (
+    <Shell>
+      <TopBar title="グループ一覧" />
+      {error ? <Alert>{error}</Alert> : null}
+      <div className="grid gap-3">
+        {items.map((item) => (
+          <button
+            key={item.publicToken}
+            onClick={() => go(`/g/${item.publicToken}`)}
+            className="focus-ring flex items-center justify-between gap-3 rounded-lg border border-line bg-white p-4 text-left shadow-soft"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-lg font-black">{item.name}</span>
+              <span className="mt-1 block text-sm text-ink/60">
+                メンバー {item.memberCount}人 / イベント {item.eventCount}件
+              </span>
+              <span className="mt-1 block text-xs text-ink/40">
+                更新: {new Date(item.updatedAt).toLocaleString("ja-JP")}
+              </span>
+            </span>
+            <ChevronRight size={20} />
+          </button>
+        ))}
+        {items.length === 0 ? <Empty text="グループはまだありません。" /> : null}
+      </div>
+      <Button onClick={() => go("/groups/new")}>
+        <Plus size={18} /> グループを作成
       </Button>
     </Shell>
   );

@@ -425,6 +425,43 @@ app.get("/api/slack-destinations", async (c) => {
   );
 });
 
+app.get("/api/groups", async (c) => {
+  const rows = (
+    await c.env.DB.prepare(
+      `SELECT
+        g.public_token,
+        g.name,
+        g.created_at,
+        g.updated_at,
+        COUNT(DISTINCT gm.id) AS member_count,
+        COUNT(DISTINCT e.id) AS event_count
+       FROM groups g
+       LEFT JOIN group_members gm ON gm.group_id = g.id
+       LEFT JOIN events e ON e.group_id = g.id
+       GROUP BY g.id
+       ORDER BY g.updated_at DESC, g.created_at DESC`
+    ).all<{
+      public_token: string;
+      name: string;
+      created_at: string;
+      updated_at: string;
+      member_count: number;
+      event_count: number;
+    }>()
+  ).results;
+
+  return c.json(
+    rows.map((row) => ({
+      publicToken: row.public_token,
+      name: row.name,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      memberCount: row.member_count,
+      eventCount: row.event_count
+    }))
+  );
+});
+
 app.post("/api/groups", async (c) => {
   const body = asObject(await c.req.json().catch(() => null));
   if (!body) return jsonError("Invalid JSON");
