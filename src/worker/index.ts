@@ -14,6 +14,7 @@ type GroupRow = {
   default_payee_name: string;
   default_paypay_info: string;
   default_bank_info: string;
+  management_password_hash: string | null;
   slack_destination_id: string | null;
   slack_destination_name: string | null;
   slack_channel_name: string | null;
@@ -81,6 +82,16 @@ const jsonError = (message: string, status = 400) =>
 
 const nowIso = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
+
+async function hashPassword(password: string) {
+  const data = new TextEncoder().encode(password);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function passwordMatches(password: string, hash: string | null) {
+  return Boolean(hash && password && (await hashPassword(password)) === hash);
+}
 
 function publicToken() {
   const bytes = new Uint8Array(18);
@@ -422,6 +433,7 @@ app.post("/api/groups", async (c) => {
   const defaultPayeeName = text(body.defaultPayeeName);
   const defaultPaypayInfo = text(body.defaultPaypayInfo);
   const defaultBankInfo = optionalText(body.defaultBankInfo);
+  const managementPassword = text(body.managementPassword);
   const slackDestinationId = text(body.slackDestinationId) || null;
   const members = Array.isArray(body.members)
     ? body.members
@@ -445,6 +457,9 @@ app.post("/api/groups", async (c) => {
   if (!defaultPaypayInfo && !defaultBankInfo) {
     return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
   }
+  if (managementPassword.length < 6) {
+    return jsonError("管理パスワードは6文字以上で入力してください");
+  }
   if (members.length < 1) return jsonError("メンバーを1人以上入力してください");
 
   if (slackDestinationId) {
@@ -457,11 +472,12 @@ app.post("/api/groups", async (c) => {
   const groupId = id();
   const token = publicToken();
   const createdAt = nowIso();
+  const passwordHash = await hashPassword(managementPassword);
   const statements = [
     c.env.DB.prepare(
-     `INSERT INTO groups
-       (id, public_token, name, default_payee_name, default_paypay_info, default_bank_info, slack_destination_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO groups
+       (id, public_token, name, default_payee_name, default_paypay_info, default_bank_info, management_password_hash, slack_destination_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       groupId,
       token,
@@ -469,6 +485,7 @@ app.post("/api/groups", async (c) => {
       defaultPayeeName,
       defaultPaypayInfo,
       defaultBankInfo,
+      passwordHash,
       slackDestinationId,
       createdAt,
       createdAt
@@ -482,6 +499,115 @@ app.post("/api/groups", async (c) => {
   await c.env.DB.batch(statements);
 
   return c.json({ id: groupId, publicToken: token, url: `/g/${token}` }, 201);
+});
+
+app.patch("/api/groups/:groupToken", async (c) => {
+  const group = await c.env.DB.prepare("SELECT * FROM groups WHERE public_token = ?")
+    .bind(c.req.param("groupToken"))
+    .first<GroupRow>();
+  if (!group) return jsonError("グループが見つかりません", 404);
+
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!body) return jsonError("Invalid JSON");
+
+  const managementPassword = text(body.managementPassword);
+  const newManagementPassword = text(body.newManagementPassword);
+  if (group.management_password_hash) {
+    if (!(await passwordMatches(managementPassword, group.management_password_hash))) {
+      return jsonError("管理パスワードが違います", 403);
+    }
+  } else if (newManagementPassword.length < 6) {
+    return jsonError("このグループには管理パスワードが未設定です。6文字以上の新しい管理パスワードを設定してください");
+  }
+
+  const name = text(body.name);
+  const defaultPayeeName = text(body.defaultPayeeName);
+  const defaultPaypayInfo = optionalText(body.defaultPaypayInfo);
+  const defaultBankInfo = optionalText(body.defaultBankInfo);
+  const slackDestinationId = text(body.slackDestinationId) || null;
+  const members = Array.isArray(body.members)
+    ? body.members
+        .map((member) => {
+          const row = asObject(member);
+          if (!row) return null;
+          return {
+            id: text(row.id) || null,
+            name: text(row.name),
+            slackUserId: text(row.slackUserId) || null,
+            slackDisplayName: text(row.slackDisplayName) || null
+          };
+        })
+        .filter((member): member is NonNullable<typeof member> => Boolean(member?.name))
+    : [];
+
+  if (!name || !defaultPayeeName) return jsonError("グループ名、受取人名を入力してください");
+  if (!defaultPaypayInfo && !defaultBankInfo) {
+    return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
+  }
+  if (members.length < 1) return jsonError("メンバーを1人以上入力してください");
+  if (slackDestinationId) {
+    const destination = await c.env.DB.prepare("SELECT id FROM slack_destinations WHERE id = ?")
+      .bind(slackDestinationId)
+      .first();
+    if (!destination) return jsonError("Slack通知先が見つかりません", 404);
+  }
+
+  const updatedAt = nowIso();
+  const nextPasswordHash =
+    newManagementPassword.length >= 6 ? await hashPassword(newManagementPassword) : group.management_password_hash;
+  const existing = (
+    await c.env.DB.prepare("SELECT id FROM group_members WHERE group_id = ?")
+      .bind(group.id)
+      .all<{ id: string }>()
+  ).results;
+  const incomingExistingIds = new Set(members.map((member) => member.id).filter(Boolean));
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare(
+      `UPDATE groups
+       SET name = ?, default_payee_name = ?, default_paypay_info = ?, default_bank_info = ?,
+           management_password_hash = ?, slack_destination_id = ?, updated_at = ?
+       WHERE id = ?`
+    ).bind(
+      name,
+      defaultPayeeName,
+      defaultPaypayInfo,
+      defaultBankInfo,
+      nextPasswordHash,
+      slackDestinationId,
+      updatedAt,
+      group.id
+    ),
+    ...existing
+      .filter((member) => !incomingExistingIds.has(member.id))
+      .map((member) => c.env.DB.prepare("DELETE FROM group_members WHERE id = ? AND group_id = ?").bind(member.id, group.id)),
+    ...members.map((member) => {
+      if (member.id) {
+        return c.env.DB.prepare(
+          "UPDATE group_members SET name = ?, slack_user_id = ?, slack_display_name = ? WHERE id = ? AND group_id = ?"
+        ).bind(member.name, member.slackUserId, member.slackDisplayName, member.id, group.id);
+      }
+      return c.env.DB.prepare(
+        "INSERT INTO group_members (id, group_id, name, slack_user_id, slack_display_name, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      ).bind(id(), group.id, member.name, member.slackUserId, member.slackDisplayName, updatedAt);
+    })
+  ];
+  await c.env.DB.batch(statements);
+
+  return c.json({ ok: true });
+});
+
+app.delete("/api/groups/:groupToken", async (c) => {
+  const group = await c.env.DB.prepare("SELECT * FROM groups WHERE public_token = ?")
+    .bind(c.req.param("groupToken"))
+    .first<GroupRow>();
+  if (!group) return jsonError("グループが見つかりません", 404);
+  const body = asObject(await c.req.json().catch(() => null));
+  const managementPassword = text(body?.managementPassword);
+  if (!(await passwordMatches(managementPassword, group.management_password_hash))) {
+    return jsonError("管理パスワードが違います", 403);
+  }
+  await c.env.DB.prepare("DELETE FROM groups WHERE id = ?").bind(group.id).run();
+  return c.json({ ok: true });
 });
 
 app.get("/api/groups/:groupToken", async (c) => {
@@ -530,6 +656,7 @@ app.get("/api/groups/:groupToken", async (c) => {
     defaultPayeeName: group.default_payee_name,
     defaultPaypayInfo: group.default_paypay_info,
     defaultBankInfo: group.default_bank_info,
+    managementPasswordSet: Boolean(group.management_password_hash),
     slackDestination: group.slack_destination_id
       ? {
           id: group.slack_destination_id,

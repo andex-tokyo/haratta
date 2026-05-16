@@ -46,6 +46,7 @@ type Group = {
   defaultPayeeName: string;
   defaultPaypayInfo: string;
   defaultBankInfo: string;
+  managementPasswordSet: boolean;
   slackDestination: SlackDestination | null;
   members: { id: string; name: string; slackUserId: string | null; slackDisplayName: string | null }[];
   events: {
@@ -56,6 +57,12 @@ type Group = {
     payableCount: number;
     paidCount: number;
   }[];
+};
+
+type RecentGroup = {
+  token: string;
+  name: string;
+  savedAt: string;
 };
 
 type EventDetail = {
@@ -137,6 +144,34 @@ function go(to: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+function recentGroups() {
+  try {
+    return JSON.parse(localStorage.getItem("haratta:recent-groups") ?? "[]") as RecentGroup[];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentGroup(group: Pick<Group, "publicToken" | "name">) {
+  const next = [
+    { token: group.publicToken, name: group.name, savedAt: new Date().toISOString() },
+    ...recentGroups().filter((item) => item.token !== group.publicToken)
+  ].slice(0, 8);
+  localStorage.setItem("haratta:recent-groups", JSON.stringify(next));
+}
+
+function groupTokenFromInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.split("/").filter(Boolean);
+    return parts[0] === "g" ? parts[1] ?? "" : "";
+  } catch {
+    return trimmed.replace(/^\/?g\//, "");
+  }
+}
+
 function App() {
   const [route, setRoute] = useState(path());
   useEffect(() => {
@@ -210,6 +245,13 @@ function inputClass() {
 }
 
 function Home() {
+  const [groupInput, setGroupInput] = useState("");
+  const [recent, setRecent] = useState<RecentGroup[]>(() => recentGroups());
+  function openGroup(event: FormEvent) {
+    event.preventDefault();
+    const token = groupTokenFromInput(groupInput);
+    if (token) go(`/g/${token}`);
+  }
   return (
     <Shell>
       <section className="flex min-h-[72vh] flex-col justify-between gap-8">
@@ -237,6 +279,25 @@ function Home() {
             通知先一覧を見る
           </Button>
         </div>
+        <form className="grid gap-2 rounded-lg border border-line bg-white p-4 shadow-soft" onSubmit={openGroup}>
+          <Field label="作成済みグループを開く" hint="グループURL、または /g/ の後ろのトークンを貼り付けます。">
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <input className={inputClass()} value={groupInput} onChange={(e) => setGroupInput(e.target.value)} placeholder="https://haratta.andex.tokyo/g/..." />
+              <Button type="submit" variant="secondary">開く</Button>
+            </div>
+          </Field>
+          {recent.length ? (
+            <div className="mt-2 grid gap-2">
+              <p className="text-xs font-bold text-ink/50">最近開いたグループ</p>
+              {recent.map((item) => (
+                <button key={item.token} type="button" className="focus-ring flex items-center justify-between rounded-lg bg-paper px-3 py-2 text-left text-sm" onClick={() => go(`/g/${item.token}`)}>
+                  <span className="truncate font-bold">{item.name}</span>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </form>
       </section>
     </Shell>
   );
@@ -319,6 +380,7 @@ function NewGroup() {
     defaultPayeeName: "",
     defaultPaypayInfo: "",
     defaultBankInfo: "",
+    managementPassword: "",
     slackDestinationId: ""
   });
   const [members, setMembers] = useState<MemberInput[]>([]);
@@ -383,6 +445,9 @@ function NewGroup() {
         {error ? <Alert>{error}</Alert> : null}
         <Field label="グループ名">
           <input className={inputClass()} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </Field>
+        <Field label="管理パスワード" hint="グループ編集・削除に使います。6文字以上。参加者の支払い操作には不要です。">
+          <input type="password" className={inputClass()} value={form.managementPassword} onChange={(e) => setForm({ ...form, managementPassword: e.target.value })} />
         </Field>
         <Field label="Slack通知先">
           <select className={inputClass()} value={form.slackDestinationId} onChange={(e) => setForm({ ...form, slackDestinationId: e.target.value })}>
@@ -467,7 +532,14 @@ function GroupDetail({ token }: { token: string }) {
   const [group, setGroup] = useState<Group | null>(null);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const load = () => api<Group>(`/api/groups/${token}`).then(setGroup).catch((e) => setError(e.message));
+  const [managing, setManaging] = useState(false);
+  const load = () =>
+    api<Group>(`/api/groups/${token}`)
+      .then((loaded) => {
+        setGroup(loaded);
+        saveRecentGroup(loaded);
+      })
+      .catch((e) => setError(e.message));
   useEffect(() => {
     void load();
   }, [token]);
@@ -484,6 +556,8 @@ function GroupDetail({ token }: { token: string }) {
       <TopBar title={group.name} />
       {creating ? (
         <EventWizard group={group} onCreated={(url) => go(url)} onCancel={() => setCreating(false)} />
+      ) : managing ? (
+        <GroupManage group={group} onSaved={() => void load()} onDeleted={() => go("/")} onCancel={() => setManaging(false)} />
       ) : (
         <>
           <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
@@ -520,6 +594,9 @@ function GroupDetail({ token }: { token: string }) {
           </section>
           <Button onClick={() => setCreating(true)}>
             <Plus size={18} /> 新規イベント作成
+          </Button>
+          <Button variant="secondary" onClick={() => setManaging(true)}>
+            グループを編集・削除
           </Button>
           <section className="grid gap-3">
             <h2 className="text-sm font-bold text-ink/70">イベント</h2>
@@ -856,6 +933,182 @@ function EventWizard({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function GroupManage({
+  group,
+  onSaved,
+  onDeleted,
+  onCancel
+}: {
+  group: Group;
+  onSaved: () => void;
+  onDeleted: () => void;
+  onCancel: () => void;
+}) {
+  const [destinations, setDestinations] = useState<SlackDestination[]>([]);
+  const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
+  const [manualName, setManualName] = useState("");
+  const [form, setForm] = useState({
+    name: group.name,
+    defaultPayeeName: group.defaultPayeeName,
+    defaultPaypayInfo: group.defaultPaypayInfo,
+    defaultBankInfo: group.defaultBankInfo,
+    slackDestinationId: group.slackDestination?.id ?? "",
+    managementPassword: "",
+    newManagementPassword: ""
+  });
+  const [members, setMembers] = useState<MemberInput[]>(
+    group.members.map((member) => ({
+      key: member.id,
+      name: member.name,
+      slackUserId: member.slackUserId ?? "",
+      slackDisplayName: member.slackDisplayName ?? ""
+    }))
+  );
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    api<SlackDestination[]>("/api/slack-destinations").then(setDestinations).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!form.slackDestinationId) {
+      setSlackUsers([]);
+      return;
+    }
+    api<SlackUser[]>(`/api/slack-destinations/${form.slackDestinationId}/users`)
+      .then(setSlackUsers)
+      .catch(() => setSlackUsers([]));
+  }, [form.slackDestinationId]);
+
+  function addMember(member: MemberInput) {
+    setMembers((current) => {
+      if (member.slackUserId && current.some((item) => item.slackUserId === member.slackUserId)) return current;
+      if (!member.slackUserId && current.some((item) => item.name === member.name)) return current;
+      return [...current, member];
+    });
+  }
+
+  function addManualMember() {
+    const name = manualName.trim();
+    if (!name) return;
+    addMember({ key: crypto.randomUUID(), name, slackUserId: "", slackDisplayName: "" });
+    setManualName("");
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await api(`/api/groups/${group.publicToken}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...form,
+          members: members.map((member) => ({
+            id: group.members.some((existing) => existing.id === member.key) ? member.key : null,
+            name: member.name,
+            slackUserId: member.slackUserId || null,
+            slackDisplayName: member.slackDisplayName || null
+          }))
+        })
+      });
+      onSaved();
+      onCancel();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeGroup() {
+    if (!window.confirm("このグループとイベントを削除します。元に戻せません。")) return;
+    setLoading(true);
+    setError("");
+    try {
+      await api(`/api/groups/${group.publicToken}`, {
+        method: "DELETE",
+        body: JSON.stringify({ managementPassword: form.managementPassword })
+      });
+      onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form className="grid gap-4" onSubmit={save}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xl font-black">グループ編集</h2>
+        <Button type="button" variant="ghost" onClick={onCancel}>閉じる</Button>
+      </div>
+      {error ? <Alert>{error}</Alert> : null}
+      <Field label={group.managementPasswordSet ? "管理パスワード" : "新しい管理パスワード"} hint={group.managementPasswordSet ? "保存・削除に必要です。" : "既存グループに初回設定します。6文字以上。"}>
+        <input type="password" className={inputClass()} value={group.managementPasswordSet ? form.managementPassword : form.newManagementPassword} onChange={(e) => setForm(group.managementPasswordSet ? { ...form, managementPassword: e.target.value } : { ...form, newManagementPassword: e.target.value })} />
+      </Field>
+      {group.managementPasswordSet ? (
+        <Field label="管理パスワード変更（任意）">
+          <input type="password" className={inputClass()} value={form.newManagementPassword} onChange={(e) => setForm({ ...form, newManagementPassword: e.target.value })} />
+        </Field>
+      ) : null}
+      <Field label="グループ名">
+        <input className={inputClass()} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </Field>
+      <Field label="Slack通知先">
+        <select className={inputClass()} value={form.slackDestinationId} onChange={(e) => setForm({ ...form, slackDestinationId: e.target.value })}>
+          <option value="">通知しない / Slackユーザー選択なし</option>
+          {destinations.map((destination) => (
+            <option key={destination.id} value={destination.id}>{destination.name} ({destination.channelName})</option>
+          ))}
+        </select>
+      </Field>
+      <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h3 className="font-black">メンバー</h3>
+        {slackUsers.length ? (
+          <details className="rounded-lg bg-paper p-3">
+            <summary className="cursor-pointer text-sm font-bold">Slackユーザーを追加</summary>
+            <div className="mt-3 grid max-h-52 gap-2 overflow-auto">
+              {slackUsers.map((user) => (
+                <button type="button" key={user.id} className="focus-ring flex items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm" onClick={() => addMember({ key: `slack-${user.id}`, name: user.name, slackUserId: user.id, slackDisplayName: user.name })}>
+                  <span>{user.name}</span>
+                  <UserPlus size={18} />
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <input className={inputClass()} placeholder="Slackにいない人の名前" value={manualName} onChange={(e) => setManualName(e.target.value)} />
+          <Button type="button" variant="secondary" onClick={addManualMember}><Plus size={18} /></Button>
+        </div>
+        <div className="grid gap-2">
+          {members.map((member) => (
+            <div key={member.key} className="grid grid-cols-[1fr_auto] gap-2 rounded-lg bg-paper p-2">
+              <input className={inputClass()} value={member.name} onChange={(e) => setMembers((current) => current.map((item) => item.key === member.key ? { ...item, name: e.target.value } : item))} />
+              <Button type="button" variant="danger" onClick={() => setMembers((current) => current.filter((item) => item.key !== member.key))}><Trash2 size={18} /></Button>
+            </div>
+          ))}
+        </div>
+      </section>
+      <Field label="受取人名">
+        <input className={inputClass()} value={form.defaultPayeeName} onChange={(e) => setForm({ ...form, defaultPayeeName: e.target.value })} />
+      </Field>
+      <Field label="PayPay送金先情報">
+        <textarea className={`${inputClass()} min-h-24`} value={form.defaultPaypayInfo} onChange={(e) => setForm({ ...form, defaultPaypayInfo: e.target.value })} />
+      </Field>
+      <Field label="振込先情報（任意）">
+        <textarea className={`${inputClass()} min-h-24`} value={form.defaultBankInfo} onChange={(e) => setForm({ ...form, defaultBankInfo: e.target.value })} />
+      </Field>
+      <Button disabled={loading}><Check size={18} /> 保存</Button>
+      <Button type="button" variant="danger" disabled={loading || !group.managementPasswordSet} onClick={removeGroup}>
+        <Trash2 size={18} /> グループを削除
+      </Button>
+    </form>
   );
 }
 
