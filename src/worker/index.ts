@@ -18,14 +18,27 @@ type GroupRow = {
   slack_destination_id: string | null;
   slack_destination_name: string | null;
   slack_channel_name: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type EventRow = {
   id: string;
   group_id: string;
+  payer_id: string | null;
   public_token: string;
   title: string;
   description: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type GroupPayerRow = {
+  id: string;
+  group_id: string;
+  name: string;
+  paypay_info: string;
+  bank_info: string;
   created_at: string;
   updated_at: string;
 };
@@ -127,6 +140,32 @@ function validUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function parsePayers(body: Record<string, unknown>) {
+  const rawPayers = Array.isArray(body.payers) ? body.payers : [];
+  const payers = rawPayers
+    .map((item) => {
+      const row = asObject(item);
+      if (!row) return null;
+      return {
+        id: text(row.id) || null,
+        name: text(row.name),
+        paypayInfo: optionalText(row.paypayInfo),
+        bankInfo: optionalText(row.bankInfo)
+      };
+    })
+    .filter((payer): payer is NonNullable<typeof payer> => Boolean(payer?.name));
+
+  if (payers.length) return payers;
+
+  const fallback = {
+    id: null,
+    name: text(body.defaultPayeeName),
+    paypayInfo: optionalText(body.defaultPaypayInfo),
+    bankInfo: optionalText(body.defaultBankInfo)
+  };
+  return fallback.name ? [fallback] : [];
 }
 
 function eventUrl(env: Bindings, token: string) {
@@ -270,10 +309,13 @@ async function maybeNotifyCompletion(env: Bindings, eventId: string) {
 async function buildEventResponse(db: D1Database, eventToken: string) {
   const event = await db
     .prepare(
-      `SELECT e.*, g.name AS group_name, g.default_payee_name, g.default_paypay_info
-        , g.public_token AS group_public_token, g.default_bank_info
+      `SELECT e.*, g.name AS group_name, g.public_token AS group_public_token,
+        COALESCE(p.name, g.default_payee_name) AS payee_name,
+        COALESCE(p.paypay_info, g.default_paypay_info) AS paypay_info,
+        COALESCE(p.bank_info, g.default_bank_info) AS bank_info
        FROM events e
        JOIN groups g ON g.id = e.group_id
+       LEFT JOIN group_payers p ON p.id = e.payer_id
        WHERE e.public_token = ?`
     )
     .bind(eventToken)
@@ -281,9 +323,9 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
       EventRow & {
         group_name: string;
         group_public_token: string;
-        default_payee_name: string;
-        default_paypay_info: string;
-        default_bank_info: string;
+        payee_name: string;
+        paypay_info: string;
+        bank_info: string;
       }
     >();
   if (!event) return null;
@@ -310,9 +352,10 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
     description: event.description,
     groupName: event.group_name,
     groupPublicToken: event.group_public_token,
-    payeeName: event.default_payee_name,
-    paypayInfo: event.default_paypay_info,
-    bankInfo: event.default_bank_info,
+    payerId: event.payer_id,
+    payeeName: event.payee_name,
+    paypayInfo: event.paypay_info,
+    bankInfo: event.bank_info,
     createdAt: event.created_at,
     updatedAt: event.updated_at,
     summary: {
@@ -478,9 +521,8 @@ app.post("/api/groups", async (c) => {
   if (!body) return jsonError("Invalid JSON");
 
   const name = text(body.name);
-  const defaultPayeeName = text(body.defaultPayeeName);
-  const defaultPaypayInfo = text(body.defaultPaypayInfo);
-  const defaultBankInfo = optionalText(body.defaultBankInfo);
+  const payers = parsePayers(body);
+  const primaryPayer = payers[0];
   const managementPassword = text(body.managementPassword);
   const slackDestinationId = text(body.slackDestinationId) || null;
   const members = Array.isArray(body.members)
@@ -499,11 +541,14 @@ app.post("/api/groups", async (c) => {
         .filter((member) => member.name)
     : [];
 
-  if (!name || !defaultPayeeName) {
-    return jsonError("グループ名、受取人名を入力してください");
+  if (!name) {
+    return jsonError("グループ名を入力してください");
   }
-  if (!defaultPaypayInfo && !defaultBankInfo) {
-    return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
+  if (!payers.length) {
+    return jsonError("建て替え者を1人以上入力してください");
+  }
+  if (payers.some((payer) => !payer.paypayInfo && !payer.bankInfo)) {
+    return jsonError("建て替え者ごとにPayPay送金先情報、または振込先情報のどちらかを入力してください");
   }
   if (managementPassword.length < 6) {
     return jsonError("管理パスワードは6文字以上で入力してください");
@@ -530,13 +575,18 @@ app.post("/api/groups", async (c) => {
       groupId,
       token,
       name,
-      defaultPayeeName,
-      defaultPaypayInfo,
-      defaultBankInfo,
+      primaryPayer.name,
+      primaryPayer.paypayInfo,
+      primaryPayer.bankInfo,
       passwordHash,
       slackDestinationId,
       createdAt,
       createdAt
+    ),
+    ...payers.map((payer) =>
+      c.env.DB.prepare(
+        "INSERT INTO group_payers (id, group_id, name, paypay_info, bank_info, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).bind(id(), groupId, payer.name, payer.paypayInfo, payer.bankInfo, createdAt, createdAt)
     ),
     ...members.map((member) =>
       c.env.DB.prepare(
@@ -569,9 +619,8 @@ app.patch("/api/groups/:groupToken", async (c) => {
   }
 
   const name = text(body.name);
-  const defaultPayeeName = text(body.defaultPayeeName);
-  const defaultPaypayInfo = optionalText(body.defaultPaypayInfo);
-  const defaultBankInfo = optionalText(body.defaultBankInfo);
+  const payers = parsePayers(body);
+  const primaryPayer = payers[0];
   const slackDestinationId = text(body.slackDestinationId) || null;
   const members = Array.isArray(body.members)
     ? body.members
@@ -588,9 +637,10 @@ app.patch("/api/groups/:groupToken", async (c) => {
         .filter((member): member is NonNullable<typeof member> => Boolean(member?.name))
     : [];
 
-  if (!name || !defaultPayeeName) return jsonError("グループ名、受取人名を入力してください");
-  if (!defaultPaypayInfo && !defaultBankInfo) {
-    return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
+  if (!name) return jsonError("グループ名を入力してください");
+  if (!payers.length) return jsonError("建て替え者を1人以上入力してください");
+  if (payers.some((payer) => !payer.paypayInfo && !payer.bankInfo)) {
+    return jsonError("建て替え者ごとにPayPay送金先情報、または振込先情報のどちらかを入力してください");
   }
   if (members.length < 1) return jsonError("メンバーを1人以上入力してください");
   if (slackDestinationId) {
@@ -608,7 +658,26 @@ app.patch("/api/groups/:groupToken", async (c) => {
       .bind(group.id)
       .all<{ id: string }>()
   ).results;
+  const existingPayers = (
+    await c.env.DB.prepare("SELECT id FROM group_payers WHERE group_id = ?")
+      .bind(group.id)
+      .all<{ id: string }>()
+  ).results;
   const incomingExistingIds = new Set(members.map((member) => member.id).filter(Boolean));
+  const incomingPayerIds = new Set(payers.map((payer) => payer.id).filter(Boolean));
+  const deletingPayerIds = existingPayers.filter((payer) => !incomingPayerIds.has(payer.id)).map((payer) => payer.id);
+  if (deletingPayerIds.length) {
+    const used = (
+      await c.env.DB.prepare(
+        `SELECT payer_id FROM events
+         WHERE group_id = ? AND payer_id IN (${deletingPayerIds.map(() => "?").join(",")})
+         LIMIT 1`
+      )
+        .bind(group.id, ...deletingPayerIds)
+        .first<{ payer_id: string }>()
+    );
+    if (used) return jsonError("イベントで使われている建て替え者は削除できません");
+  }
   const statements: D1PreparedStatement[] = [
     c.env.DB.prepare(
       `UPDATE groups
@@ -617,9 +686,9 @@ app.patch("/api/groups/:groupToken", async (c) => {
        WHERE id = ?`
     ).bind(
       name,
-      defaultPayeeName,
-      defaultPaypayInfo,
-      defaultBankInfo,
+      primaryPayer.name,
+      primaryPayer.paypayInfo,
+      primaryPayer.bankInfo,
       nextPasswordHash,
       slackDestinationId,
       updatedAt,
@@ -628,6 +697,19 @@ app.patch("/api/groups/:groupToken", async (c) => {
     ...existing
       .filter((member) => !incomingExistingIds.has(member.id))
       .map((member) => c.env.DB.prepare("DELETE FROM group_members WHERE id = ? AND group_id = ?").bind(member.id, group.id)),
+    ...existingPayers
+      .filter((payer) => !incomingPayerIds.has(payer.id))
+      .map((payer) => c.env.DB.prepare("DELETE FROM group_payers WHERE id = ? AND group_id = ?").bind(payer.id, group.id)),
+    ...payers.map((payer) => {
+      if (payer.id) {
+        return c.env.DB.prepare(
+          "UPDATE group_payers SET name = ?, paypay_info = ?, bank_info = ?, updated_at = ? WHERE id = ? AND group_id = ?"
+        ).bind(payer.name, payer.paypayInfo, payer.bankInfo, updatedAt, payer.id, group.id);
+      }
+      return c.env.DB.prepare(
+        "INSERT INTO group_payers (id, group_id, name, paypay_info, bank_info, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).bind(id(), group.id, payer.name, payer.paypayInfo, payer.bankInfo, updatedAt, updatedAt);
+    }),
     ...members.map((member) => {
       if (member.id) {
         return c.env.DB.prepare(
@@ -674,6 +756,11 @@ app.get("/api/groups/:groupToken", async (c) => {
       .bind(group.id)
       .all<GroupMemberRow>()
   ).results;
+  const payers = (
+    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
+      .bind(group.id)
+      .all<GroupPayerRow>()
+  ).results;
   const events = (
     await c.env.DB.prepare(
       `SELECT e.id, e.public_token, e.title, e.description, e.created_at,
@@ -704,6 +791,27 @@ app.get("/api/groups/:groupToken", async (c) => {
     defaultPayeeName: group.default_payee_name,
     defaultPaypayInfo: group.default_paypay_info,
     defaultBankInfo: group.default_bank_info,
+    payers: (payers.length
+      ? payers
+      : [
+          {
+            id: "",
+            group_id: group.id,
+            name: group.default_payee_name,
+            paypay_info: group.default_paypay_info,
+            bank_info: group.default_bank_info,
+            created_at: group.created_at,
+            updated_at: group.updated_at
+          }
+        ]
+    ).map((payer) => ({
+      id: payer.id,
+      name: payer.name,
+      paypayInfo: payer.paypay_info,
+      bankInfo: payer.bank_info,
+      createdAt: payer.created_at,
+      updatedAt: payer.updated_at
+    })),
     managementPasswordSet: Boolean(group.management_password_hash),
     slackDestination: group.slack_destination_id
       ? {
@@ -742,6 +850,7 @@ app.post("/api/groups/:groupToken/events", async (c) => {
 
   const title = text(body.title);
   const description = optionalText(body.description);
+  const payerId = text(body.payerId);
   const memberAmounts = Array.isArray(body.memberAmounts) ? body.memberAmounts : [];
   const extraMembers = Array.isArray(body.extraMembers) ? body.extraMembers : [];
   const paypayLinks = Array.isArray(body.paypayLinks) ? body.paypayLinks : [];
@@ -753,6 +862,13 @@ app.post("/api/groups/:groupToken/events", async (c) => {
       .bind(group.id)
       .all<GroupMemberRow>()
   ).results;
+  const payers = (
+    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
+      .bind(group.id)
+      .all<GroupPayerRow>()
+  ).results;
+  const selectedPayer = payerId ? payers.find((payer) => payer.id === payerId) : payers[0];
+  if (payers.length && !selectedPayer) return jsonError("建て替え者が見つかりません", 404);
   const memberMap = new Map(members.map((member) => [member.id, member]));
   const parsedAmounts: {
     memberId: string | null;
@@ -824,9 +940,9 @@ app.post("/api/groups/:groupToken/events", async (c) => {
   const token = publicToken();
   const createdAt = nowIso();
   const eventStatement = c.env.DB.prepare(
-    `INSERT INTO events (id, group_id, public_token, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(eventId, group.id, token, title, description, createdAt, createdAt);
+    `INSERT INTO events (id, group_id, payer_id, public_token, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(eventId, group.id, selectedPayer?.id ?? null, token, title, description, createdAt, createdAt);
   const memberStatements = parsedAmounts.map((item) => {
     return c.env.DB.prepare(
       `INSERT INTO event_members
@@ -893,6 +1009,7 @@ app.patch("/api/events/:eventToken", async (c) => {
 
   const title = text(body.title);
   const description = optionalText(body.description);
+  const payerId = text(body.payerId);
   const members = Array.isArray(body.members) ? body.members : [];
   const paypayLinks = Array.isArray(body.paypayLinks) ? body.paypayLinks : [];
   if (!title) return jsonError("イベント名を入力してください");
@@ -910,6 +1027,13 @@ app.patch("/api/events/:eventToken", async (c) => {
       .all<GroupMemberRow>()
   ).results;
   const groupMemberMap = new Map(groupMembers.map((member) => [member.id, member]));
+  const payers = (
+    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
+      .bind(event.group_id)
+      .all<GroupPayerRow>()
+  ).results;
+  const selectedPayer = payerId ? payers.find((payer) => payer.id === payerId) : payers[0];
+  if (payers.length && !selectedPayer) return jsonError("建て替え者が見つかりません", 404);
 
   const parsedMembers: {
     id: string | null;
@@ -978,7 +1102,8 @@ app.patch("/api/events/:eventToken", async (c) => {
   const updatedAt = nowIso();
   const incomingIds = new Set(parsedMembers.map((member) => member.id).filter(Boolean));
   const statements: D1PreparedStatement[] = [
-    c.env.DB.prepare("UPDATE events SET title = ?, description = ?, updated_at = ? WHERE id = ?").bind(
+    c.env.DB.prepare("UPDATE events SET payer_id = ?, title = ?, description = ?, updated_at = ? WHERE id = ?").bind(
+      selectedPayer?.id ?? null,
       title,
       description,
       updatedAt,

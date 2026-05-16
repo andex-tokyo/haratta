@@ -39,6 +39,21 @@ type MemberInput = {
   slackDisplayName: string;
 };
 
+type PayerInput = {
+  key: string;
+  id: string | null;
+  name: string;
+  paypayInfo: string;
+  bankInfo: string;
+};
+
+type GroupPayer = {
+  id: string;
+  name: string;
+  paypayInfo: string;
+  bankInfo: string;
+};
+
 type Group = {
   id: string;
   publicToken: string;
@@ -46,6 +61,7 @@ type Group = {
   defaultPayeeName: string;
   defaultPaypayInfo: string;
   defaultBankInfo: string;
+  payers: GroupPayer[];
   managementPasswordSet: boolean;
   slackDestination: SlackDestination | null;
   members: { id: string; name: string; slackUserId: string | null; slackDisplayName: string | null }[];
@@ -80,6 +96,7 @@ type EventDetail = {
   description: string;
   groupName: string;
   groupPublicToken: string;
+  payerId: string | null;
   payeeName: string;
   paypayInfo: string;
   bankInfo: string;
@@ -120,6 +137,7 @@ type Draft = {
   step: 1 | 2 | 3;
   title: string;
   description: string;
+  payerId: string;
   amountMode: "same" | "individual";
   sameAmount: number;
   selectedMemberIds: Record<string, boolean>;
@@ -133,6 +151,7 @@ const defaultDraft: Draft = {
   step: 1,
   title: "",
   description: "",
+  payerId: "",
   amountMode: "same",
   sameAmount: 0,
   selectedMemberIds: {},
@@ -416,13 +435,13 @@ function NewGroup() {
   const [manualName, setManualName] = useState("");
   const [form, setForm] = useState({
     name: "",
-    defaultPayeeName: "",
-    defaultPaypayInfo: "",
-    defaultBankInfo: "",
     managementPassword: "",
     slackDestinationId: ""
   });
   const [members, setMembers] = useState<MemberInput[]>([]);
+  const [payers, setPayers] = useState<PayerInput[]>([
+    { key: crypto.randomUUID(), id: null, name: "", paypayInfo: "", bankInfo: "" }
+  ]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   useEffect(() => {
@@ -462,6 +481,11 @@ function NewGroup() {
         method: "POST",
         body: JSON.stringify({
           ...form,
+          payers: payers.map((payer) => ({
+            name: payer.name,
+            paypayInfo: payer.paypayInfo,
+            bankInfo: payer.bankInfo
+          })),
           members: members.map((member) => ({
             name: member.name,
             slackUserId: member.slackUserId || null,
@@ -550,20 +574,67 @@ function NewGroup() {
           </div>
         </section>
 
-        <Field label="受取人名">
-          <input className={inputClass()} value={form.defaultPayeeName} onChange={(e) => setForm({ ...form, defaultPayeeName: e.target.value })} />
-        </Field>
-        <Field label="PayPay送金先情報" hint="PayPay ID、電話番号、PayPayプロフィールURLなど、リンクが使えない時に送金先を特定できる情報を入れます。">
-          <textarea className={`${inputClass()} min-h-24`} value={form.defaultPaypayInfo} onChange={(e) => setForm({ ...form, defaultPaypayInfo: e.target.value })} />
-        </Field>
-        <Field label="振込先情報（任意）" hint="銀行振込も受け付ける場合だけ入力します。銀行名、支店、種別、口座番号、名義など。">
-          <textarea className={`${inputClass()} min-h-24`} value={form.defaultBankInfo} onChange={(e) => setForm({ ...form, defaultBankInfo: e.target.value })} />
-        </Field>
+        <PayerEditor payers={payers} onChange={setPayers} />
         <Button disabled={loading}>
           <Check size={18} /> 作成
         </Button>
       </form>
     </Shell>
+  );
+}
+
+function PayerEditor({
+  payers,
+  onChange
+}: {
+  payers: PayerInput[];
+  onChange: (payers: PayerInput[]) => void;
+}) {
+  function update(key: string, patch: Partial<PayerInput>) {
+    onChange(payers.map((payer) => (payer.key === key ? { ...payer, ...patch } : payer)));
+  }
+
+  return (
+    <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+      <div>
+        <h2 className="font-black">建て替え者</h2>
+        <p className="mt-1 text-sm text-ink/60">イベント作成時に、この中から誰が建て替えたかを選びます。</p>
+      </div>
+      <div className="grid gap-3">
+        {payers.map((payer, index) => (
+          <div key={payer.key} className="grid gap-3 rounded-lg bg-paper p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-bold">建て替え者 {index + 1}</p>
+              <Button
+                type="button"
+                variant="danger"
+                className="w-11 px-0"
+                disabled={payers.length <= 1}
+                onClick={() => onChange(payers.filter((item) => item.key !== payer.key))}
+              >
+                <Trash2 size={18} />
+              </Button>
+            </div>
+            <Field label="名前">
+              <input className={inputClass()} value={payer.name} onChange={(e) => update(payer.key, { name: e.target.value })} />
+            </Field>
+            <Field label="PayPay送金先情報" hint="PayPay ID、電話番号、PayPayプロフィールURLなど。">
+              <textarea className={`${inputClass()} min-h-20`} value={payer.paypayInfo} onChange={(e) => update(payer.key, { paypayInfo: e.target.value })} />
+            </Field>
+            <Field label="振込先情報（任意）" hint="銀行振込も受け付ける場合だけ入力します。">
+              <textarea className={`${inputClass()} min-h-20`} value={payer.bankInfo} onChange={(e) => update(payer.key, { bankInfo: e.target.value })} />
+            </Field>
+          </div>
+        ))}
+      </div>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={() => onChange([...payers, { key: crypto.randomUUID(), id: null, name: "", paypayInfo: "", bankInfo: "" }])}
+      >
+        <Plus size={18} /> 建て替え者を追加
+      </Button>
+    </section>
   );
 }
 
@@ -600,24 +671,14 @@ function GroupDetail({ token }: { token: string }) {
       ) : (
         <>
           <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
-            <p className="text-sm text-ink/60">受取人</p>
-            <p className="font-bold">{group.defaultPayeeName}</p>
-            {group.defaultPaypayInfo ? (
-              <div className="rounded-lg bg-paper p-3">
-                <p className="mb-1 flex items-center gap-2 text-xs font-bold text-ink/60">
-                  <CreditCard size={14} /> PayPay送金先情報
-                </p>
-                <p className="whitespace-pre-wrap text-sm text-ink/70">{group.defaultPaypayInfo}</p>
-              </div>
-            ) : null}
-            {group.defaultBankInfo ? (
-              <div className="rounded-lg bg-paper p-3">
-                <p className="mb-1 flex items-center gap-2 text-xs font-bold text-ink/60">
-                  <Building2 size={14} /> 振込先情報
-                </p>
-                <p className="whitespace-pre-wrap text-sm text-ink/70">{group.defaultBankInfo}</p>
-              </div>
-            ) : null}
+            <p className="text-sm font-bold text-ink/60">建て替え者</p>
+            <div className="flex flex-wrap gap-2">
+              {group.payers.map((payer) => (
+                <span className="rounded-full border border-line bg-paper px-3 py-1 text-sm font-bold" key={payer.id || payer.name}>
+                  {payer.name}
+                </span>
+              ))}
+            </div>
             <p className="text-sm text-ink/60">Slack: {group.slackDestination ? `${group.slackDestination.name} (${group.slackDestination.channelName})` : "未設定"}</p>
           </section>
           <section>
@@ -688,6 +749,10 @@ function EventWizard({
     }));
   }, [draft.selectedMemberIds, group.members]);
   useEffect(() => {
+    if (draft.payerId || !group.payers[0]?.id) return;
+    setDraft((current) => ({ ...current, payerId: group.payers[0].id }));
+  }, [draft.payerId, group.payers]);
+  useEffect(() => {
     if (!group.slackDestination?.id) return;
     api<SlackUser[]>(`/api/slack-destinations/${group.slackDestination.id}/users`)
       .then(setSlackUsers)
@@ -747,6 +812,7 @@ function EventWizard({
         body: JSON.stringify({
           title: draft.title,
           description: draft.description,
+          payerId: draft.payerId,
           amountMode: draft.amountMode,
           memberAmounts: amounts
             .filter((item) => item.memberId)
@@ -795,6 +861,13 @@ function EventWizard({
           </Field>
           <Field label="説明">
             <textarea className={`${inputClass()} min-h-20`} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+          </Field>
+          <Field label="建て替え者" hint="このイベントの回収先として表示されます。">
+            <select className={inputClass()} value={draft.payerId} onChange={(e) => setDraft({ ...draft, payerId: e.target.value })}>
+              {group.payers.map((payer) => (
+                <option key={payer.id || payer.name} value={payer.id}>{payer.name}</option>
+              ))}
+            </select>
           </Field>
           <section className="grid gap-3 rounded-lg border border-line bg-white p-4">
             <div>
@@ -961,10 +1034,11 @@ function EventWizard({
         <div className="grid gap-4">
           <div className="rounded-lg border border-line bg-white p-4">
             <p className="font-black">{draft.title || "イベント名未入力"}</p>
+            <p className="mt-2 text-sm text-ink/60">建て替え者: {group.payers.find((payer) => payer.id === draft.payerId)?.name ?? group.payers[0]?.name ?? "-"}</p>
             <p className="mt-2 text-sm text-ink/60">{positiveAmounts.length}種類のPayPay支払いリンク</p>
           </div>
           <Button disabled={loading} onClick={create}>
-            <Send size={18} /> イベントを作成してSlack通知
+            <Send size={18} /> イベントを作成
           </Button>
           <Button variant="secondary" onClick={() => setDraft({ ...draft, step: 2 })}>
             戻る
@@ -991,13 +1065,19 @@ function GroupManage({
   const [manualName, setManualName] = useState("");
   const [form, setForm] = useState({
     name: group.name,
-    defaultPayeeName: group.defaultPayeeName,
-    defaultPaypayInfo: group.defaultPaypayInfo,
-    defaultBankInfo: group.defaultBankInfo,
     slackDestinationId: group.slackDestination?.id ?? "",
     managementPassword: "",
     newManagementPassword: ""
   });
+  const [payers, setPayers] = useState<PayerInput[]>(
+    (group.payers.length ? group.payers : [{ id: "", name: group.defaultPayeeName, paypayInfo: group.defaultPaypayInfo, bankInfo: group.defaultBankInfo }]).map((payer) => ({
+      key: payer.id || crypto.randomUUID(),
+      id: payer.id || null,
+      name: payer.name,
+      paypayInfo: payer.paypayInfo,
+      bankInfo: payer.bankInfo
+    }))
+  );
   const [members, setMembers] = useState<MemberInput[]>(
     group.members.map((member) => ({
       key: member.id,
@@ -1046,6 +1126,12 @@ function GroupManage({
         method: "PATCH",
         body: JSON.stringify({
           ...form,
+          payers: payers.map((payer) => ({
+            id: payer.id,
+            name: payer.name,
+            paypayInfo: payer.paypayInfo,
+            bankInfo: payer.bankInfo
+          })),
           members: members.map((member) => ({
             id: group.members.some((existing) => existing.id === member.key) ? member.key : null,
             name: member.name,
@@ -1134,15 +1220,7 @@ function GroupManage({
           ))}
         </div>
       </section>
-      <Field label="受取人名">
-        <input className={inputClass()} value={form.defaultPayeeName} onChange={(e) => setForm({ ...form, defaultPayeeName: e.target.value })} />
-      </Field>
-      <Field label="PayPay送金先情報">
-        <textarea className={`${inputClass()} min-h-24`} value={form.defaultPaypayInfo} onChange={(e) => setForm({ ...form, defaultPaypayInfo: e.target.value })} />
-      </Field>
-      <Field label="振込先情報（任意）">
-        <textarea className={`${inputClass()} min-h-24`} value={form.defaultBankInfo} onChange={(e) => setForm({ ...form, defaultBankInfo: e.target.value })} />
-      </Field>
+      <PayerEditor payers={payers} onChange={setPayers} />
       <Button disabled={loading}><Check size={18} /> 保存</Button>
       <Button type="button" variant="danger" disabled={loading || !group.managementPasswordSet} onClick={removeGroup}>
         <Trash2 size={18} /> グループを削除
@@ -1305,6 +1383,7 @@ function EventEdit({
   const [group, setGroup] = useState<Group | null>(null);
   const [title, setTitle] = useState(event.title);
   const [description, setDescription] = useState(event.description);
+  const [payerId, setPayerId] = useState(event.payerId ?? "");
   const [managementPassword, setManagementPassword] = useState("");
   const [members, setMembers] = useState<EventEditMember[]>(
     event.members.map((member) => ({
@@ -1378,6 +1457,7 @@ function EventEdit({
         method: "PATCH",
         body: JSON.stringify({
           managementPassword,
+          payerId,
           title,
           description,
           members: members.map((member) => ({
@@ -1431,6 +1511,15 @@ function EventEdit({
       <Field label="イベント名">
         <input className={inputClass()} value={title} onChange={(e) => setTitle(e.target.value)} />
       </Field>
+      {group?.payers.length ? (
+        <Field label="建て替え者">
+          <select className={inputClass()} value={payerId || group.payers[0].id} onChange={(e) => setPayerId(e.target.value)}>
+            {group.payers.map((payer) => (
+              <option key={payer.id || payer.name} value={payer.id}>{payer.name}</option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
       <Field label="説明">
         <textarea className={`${inputClass()} min-h-20`} value={description} onChange={(e) => setDescription(e.target.value)} />
       </Field>
