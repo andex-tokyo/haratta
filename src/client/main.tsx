@@ -245,33 +245,45 @@ function inputClass() {
 function Home() {
   return (
     <Shell>
-      <section className="flex min-h-[72vh] flex-col justify-between gap-8">
-        <div className="pt-10">
-          <p className="mb-3 text-sm font-bold text-leaf">誰が払ったか、もう迷わない。</p>
-          <h1 className="text-5xl font-black tracking-normal text-ink sm:text-6xl">ハラッタ？</h1>
-          <p className="mt-5 max-w-xl text-lg leading-8 text-ink/70">
-            PayPay支払いリンクを金額ごとにまとめて、未払いの確認、支払い済み更新、Slack通知まで身内でさっと回せます。
+      <section className="grid min-h-[72vh] content-start gap-6">
+        <div className="pt-6">
+          <p className="text-sm font-bold text-leaf">誰が払ったか、もう迷わない。</p>
+          <h1 className="mt-2 text-5xl font-black tracking-normal text-ink sm:text-6xl">ハラッタ？</h1>
+          <p className="mt-4 max-w-xl text-base leading-7 text-ink/70">
+            グループを選んでイベントを作成し、PayPay支払いリンクと未払い状況を共有します。
           </p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Button onClick={() => go("/groups/new")} className="justify-between">
+
+        <div className="grid gap-3">
+          <button
+            onClick={() => go("/groups")}
+            className="focus-ring flex items-center justify-between gap-4 rounded-lg bg-leaf p-5 text-left text-white shadow-soft transition hover:bg-ink"
+          >
+            <span>
+              <span className="block text-xl font-black">グループを選んでイベント作成</span>
+              <span className="mt-1 block text-sm text-white/80">既存グループのイベント作成・支払い状況確認へ進みます。</span>
+            </span>
+            <ChevronRight size={18} />
+          </button>
+
+          <Button variant="secondary" onClick={() => go("/groups/new")} className="justify-between">
             <span className="inline-flex items-center gap-2">
-              <Users size={18} /> グループを作成
+              <Users size={18} /> 新しいグループを作成
             </span>
             <ChevronRight size={18} />
           </Button>
-          <Button variant="secondary" onClick={() => go("/slack-destinations/new")} className="justify-between">
-            <span className="inline-flex items-center gap-2">
-              <Bell size={18} /> Slack通知先を登録
-            </span>
-            <ChevronRight size={18} />
-          </Button>
-          <Button variant="ghost" onClick={() => go("/slack-destinations")} className="sm:col-span-2">
-            通知先一覧を見る
-          </Button>
-          <Button variant="secondary" onClick={() => go("/groups")} className="sm:col-span-2">
-            <Users size={18} /> グループ一覧を見る
-          </Button>
+        </div>
+
+        <div className="mt-auto border-t border-line pt-4">
+          <p className="mb-2 text-xs font-bold text-ink/50">設定</p>
+          <div className="flex flex-wrap gap-2">
+            <button className="focus-ring rounded-lg px-3 py-2 text-sm font-bold text-ink/70 hover:bg-mint" onClick={() => go("/slack-destinations")}>
+              Slack通知先
+            </button>
+            <button className="focus-ring rounded-lg px-3 py-2 text-sm font-bold text-ink/70 hover:bg-mint" onClick={() => go("/slack-destinations/new")}>
+              Slack通知先を追加
+            </button>
+          </div>
         </div>
       </section>
     </Shell>
@@ -313,7 +325,7 @@ function GroupsList() {
 
   return (
     <Shell>
-      <TopBar title="グループ一覧" />
+      <TopBar title="グループを選ぶ" />
       {error ? <Alert>{error}</Alert> : null}
       <div className="grid gap-3">
         {items.map((item) => (
@@ -326,6 +338,9 @@ function GroupsList() {
               <span className="block truncate text-lg font-black">{item.name}</span>
               <span className="mt-1 block text-sm text-ink/60">
                 メンバー {item.memberCount}人 / イベント {item.eventCount}件
+              </span>
+              <span className="mt-1 block text-sm font-bold text-leaf">
+                イベント作成・支払い状況確認へ
               </span>
               <span className="mt-1 block text-xs text-ink/40">
                 更新: {new Date(item.updatedAt).toLocaleString("ja-JP")}
