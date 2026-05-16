@@ -3,19 +3,21 @@
   "name": "haratta",
   "main": "src/worker/index.ts",
   "compatibility_date": "2024-12-30",
+  "workers_dev": true,
+  "preview_urls": true,
   "assets": {
     "directory": "dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
   "vars": {
-    "APP_BASE_URL": "http://localhost:5173"
+    "APP_BASE_URL": "https://haratta.tsuchida.workers.dev"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "haratta-db",
-      "database_id": "replace-with-your-d1-database-id",
+      "database_id": "738b4406-14eb-4b52-823f-04eecefe2428",
       "migrations_dir": "migrations"
     }
   ],

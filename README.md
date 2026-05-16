@@ -94,7 +94,7 @@ pnpm wrangler secret put APP_BASE_URL
 デプロイします。
 
 ```bash
-pnpm deploy
+pnpm run deploy
 ```
 
 ## Cron
