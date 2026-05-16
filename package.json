@@ -1,0 +1,36 @@
+{
+  "name": "haratta",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "db:migrations:local": "wrangler d1 migrations apply haratta-db --local",
+    "db:migrations:remote": "wrangler d1 migrations apply haratta-db --remote"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.4.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "hono": "^4.6.16",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "wrangler": "4.92.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
