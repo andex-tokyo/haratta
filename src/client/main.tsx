@@ -1,13 +1,17 @@
 import {
   ArrowLeft,
   Bell,
+  Building2,
   Check,
   ChevronRight,
   Clipboard,
+  CreditCard,
   ExternalLink,
   Plus,
   RotateCcw,
   Send,
+  Trash2,
+  UserPlus,
   Users
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -21,14 +25,29 @@ type SlackDestination = {
   channelName: string;
 };
 
+type SlackUser = {
+  id: string;
+  name: string;
+  handle: string;
+  email: string;
+};
+
+type MemberInput = {
+  key: string;
+  name: string;
+  slackUserId: string;
+  slackDisplayName: string;
+};
+
 type Group = {
   id: string;
   publicToken: string;
   name: string;
   defaultPayeeName: string;
   defaultPaypayInfo: string;
+  defaultBankInfo: string;
   slackDestination: SlackDestination | null;
-  members: { id: string; name: string }[];
+  members: { id: string; name: string; slackUserId: string | null; slackDisplayName: string | null }[];
   events: {
     id: string;
     publicToken: string;
@@ -46,6 +65,7 @@ type EventDetail = {
   groupName: string;
   payeeName: string;
   paypayInfo: string;
+  bankInfo: string;
   summary: {
     totalAmount: number;
     payableCount: number;
@@ -54,8 +74,11 @@ type EventDetail = {
   };
   members: {
     id: string;
-    groupMemberId: string;
+    groupMemberId: string | null;
     name: string;
+    slackUserId: string | null;
+    slackDisplayName: string | null;
+    memberType: "group" | "guest";
     amount: number;
     status: "unpaid" | "paid";
     paidAt: string | null;
@@ -70,6 +93,8 @@ type Draft = {
   description: string;
   amountMode: "same" | "individual";
   sameAmount: number;
+  selectedMemberIds: Record<string, boolean>;
+  extraMembers: MemberInput[];
   memberAmounts: Record<string, number>;
   paypayLinks: Record<string, string>;
 };
@@ -81,6 +106,8 @@ const defaultDraft: Draft = {
   description: "",
   amountMode: "same",
   sameAmount: 0,
+  selectedMemberIds: {},
+  extraMembers: [],
   memberAmounts: {},
   paypayLinks: {}
 };
@@ -242,7 +269,7 @@ function SlackDestinations() {
 }
 
 function NewSlackDestination() {
-  const [form, setForm] = useState({ name: "", channelName: "", webhookUrl: "" });
+  const [form, setForm] = useState({ name: "", channelName: "", webhookUrl: "", botToken: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   async function submit(event: FormEvent) {
@@ -272,6 +299,9 @@ function NewSlackDestination() {
         <Field label="Incoming Webhook URL" hint="保存後、このURLは画面に表示しません。">
           <input className={inputClass()} value={form.webhookUrl} onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })} />
         </Field>
+        <Field label="Bot User OAuth Token（任意）" hint="Slackユーザー選択とメンションに使います。users:read 権限の xoxb- トークンを入れてください。">
+          <input className={inputClass()} placeholder="xoxb-..." value={form.botToken} onChange={(e) => setForm({ ...form, botToken: e.target.value })} />
+        </Field>
         <Button disabled={loading}>
           <Check size={18} /> 登録
         </Button>
@@ -282,18 +312,45 @@ function NewSlackDestination() {
 
 function NewGroup() {
   const [destinations, setDestinations] = useState<SlackDestination[]>([]);
+  const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
+  const [manualName, setManualName] = useState("");
   const [form, setForm] = useState({
     name: "",
-    members: "",
     defaultPayeeName: "",
     defaultPaypayInfo: "",
+    defaultBankInfo: "",
     slackDestinationId: ""
   });
+  const [members, setMembers] = useState<MemberInput[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     api<SlackDestination[]>("/api/slack-destinations").then(setDestinations).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (!form.slackDestinationId) {
+      setSlackUsers([]);
+      return;
+    }
+    api<SlackUser[]>(`/api/slack-destinations/${form.slackDestinationId}/users`)
+      .then(setSlackUsers)
+      .catch(() => setSlackUsers([]));
+  }, [form.slackDestinationId]);
+
+  function addMember(member: MemberInput) {
+    setMembers((current) => {
+      if (member.slackUserId && current.some((item) => item.slackUserId === member.slackUserId)) return current;
+      if (!member.slackUserId && current.some((item) => item.name === member.name)) return current;
+      return [...current, member];
+    });
+  }
+
+  function addManualMember() {
+    const name = manualName.trim();
+    if (!name) return;
+    addMember({ key: crypto.randomUUID(), name, slackUserId: "", slackDisplayName: "" });
+    setManualName("");
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -304,7 +361,11 @@ function NewGroup() {
         method: "POST",
         body: JSON.stringify({
           ...form,
-          members: form.members.split(/\n|,/).map((v) => v.trim()).filter(Boolean)
+          members: members.map((member) => ({
+            name: member.name,
+            slackUserId: member.slackUserId || null,
+            slackDisplayName: member.slackDisplayName || null
+          }))
         })
       });
       go(result.url);
@@ -323,24 +384,76 @@ function NewGroup() {
         <Field label="グループ名">
           <input className={inputClass()} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </Field>
-        <Field label="メンバー一覧" hint="改行またはカンマ区切りで入力できます。">
-          <textarea className={`${inputClass()} min-h-28`} value={form.members} onChange={(e) => setForm({ ...form, members: e.target.value })} />
-        </Field>
-        <Field label="支払先名">
-          <input className={inputClass()} value={form.defaultPayeeName} onChange={(e) => setForm({ ...form, defaultPayeeName: e.target.value })} />
-        </Field>
-        <Field label="PayPay送金先情報">
-          <textarea className={`${inputClass()} min-h-24`} value={form.defaultPaypayInfo} onChange={(e) => setForm({ ...form, defaultPaypayInfo: e.target.value })} />
-        </Field>
         <Field label="Slack通知先">
           <select className={inputClass()} value={form.slackDestinationId} onChange={(e) => setForm({ ...form, slackDestinationId: e.target.value })}>
-            <option value="">通知しない</option>
+            <option value="">通知しない / Slackユーザー選択なし</option>
             {destinations.map((destination) => (
               <option key={destination.id} value={destination.id}>
                 {destination.name} ({destination.channelName})
               </option>
             ))}
           </select>
+        </Field>
+
+        <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+          <div>
+            <h2 className="font-black">メンバー</h2>
+            <p className="mt-1 text-sm text-ink/60">Slackユーザーを選ぶか、Slackにいない人は名前で追加します。</p>
+          </div>
+          {slackUsers.length ? (
+            <div className="grid max-h-64 gap-2 overflow-auto rounded-lg bg-paper p-2">
+              {slackUsers.map((user) => (
+                <button
+                  type="button"
+                  key={user.id}
+                  className="focus-ring flex items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm"
+                  onClick={() =>
+                    addMember({
+                      key: user.id,
+                      name: user.name,
+                      slackUserId: user.id,
+                      slackDisplayName: user.name
+                    })
+                  }
+                >
+                  <span>
+                    <span className="block font-bold">{user.name}</span>
+                    <span className="text-xs text-ink/50">{user.handle ? `@${user.handle}` : user.email}</span>
+                  </span>
+                  <UserPlus size={18} />
+                </button>
+              ))}
+            </div>
+          ) : form.slackDestinationId ? (
+            <p className="rounded-lg bg-paper p-3 text-sm text-ink/60">Bot token未設定、またはSlackユーザーを取得できません。手入力で追加できます。</p>
+          ) : null}
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <input className={inputClass()} placeholder="Slackにいない人の名前" value={manualName} onChange={(e) => setManualName(e.target.value)} />
+            <Button type="button" variant="secondary" onClick={addManualMember}>
+              <Plus size={18} />
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {members.map((member) => (
+              <span key={member.key} className="inline-flex items-center gap-2 rounded-full border border-line bg-paper px-3 py-1 text-sm">
+                {member.name}
+                {member.slackUserId ? <span className="text-xs text-leaf">Slack</span> : null}
+                <button type="button" onClick={() => setMembers((current) => current.filter((item) => item.key !== member.key))} aria-label={`${member.name}を削除`}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <Field label="受取人名">
+          <input className={inputClass()} value={form.defaultPayeeName} onChange={(e) => setForm({ ...form, defaultPayeeName: e.target.value })} />
+        </Field>
+        <Field label="PayPay送金先情報" hint="PayPay ID、電話番号、PayPayプロフィールURLなど、リンクが使えない時に送金先を特定できる情報を入れます。">
+          <textarea className={`${inputClass()} min-h-24`} value={form.defaultPaypayInfo} onChange={(e) => setForm({ ...form, defaultPaypayInfo: e.target.value })} />
+        </Field>
+        <Field label="振込先情報（任意）" hint="銀行振込も受け付ける場合だけ入力します。銀行名、支店、種別、口座番号、名義など。">
+          <textarea className={`${inputClass()} min-h-24`} value={form.defaultBankInfo} onChange={(e) => setForm({ ...form, defaultBankInfo: e.target.value })} />
         </Field>
         <Button disabled={loading}>
           <Check size={18} /> 作成
@@ -374,9 +487,24 @@ function GroupDetail({ token }: { token: string }) {
       ) : (
         <>
           <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
-            <p className="text-sm text-ink/60">支払先</p>
+            <p className="text-sm text-ink/60">受取人</p>
             <p className="font-bold">{group.defaultPayeeName}</p>
-            <p className="whitespace-pre-wrap text-sm text-ink/70">{group.defaultPaypayInfo}</p>
+            {group.defaultPaypayInfo ? (
+              <div className="rounded-lg bg-paper p-3">
+                <p className="mb-1 flex items-center gap-2 text-xs font-bold text-ink/60">
+                  <CreditCard size={14} /> PayPay送金先情報
+                </p>
+                <p className="whitespace-pre-wrap text-sm text-ink/70">{group.defaultPaypayInfo}</p>
+              </div>
+            ) : null}
+            {group.defaultBankInfo ? (
+              <div className="rounded-lg bg-paper p-3">
+                <p className="mb-1 flex items-center gap-2 text-xs font-bold text-ink/60">
+                  <Building2 size={14} /> 振込先情報
+                </p>
+                <p className="whitespace-pre-wrap text-sm text-ink/70">{group.defaultBankInfo}</p>
+              </div>
+            ) : null}
             <p className="text-sm text-ink/60">Slack: {group.slackDestination ? `${group.slackDestination.name} (${group.slackDestination.channelName})` : "未設定"}</p>
           </section>
           <section>
@@ -385,6 +513,7 @@ function GroupDetail({ token }: { token: string }) {
               {group.members.map((member) => (
                 <span className="rounded-full border border-line bg-white px-3 py-1 text-sm" key={member.id}>
                   {member.name}
+                  {member.slackUserId ? <span className="ml-2 text-xs text-leaf">Slack</span> : null}
                 </span>
               ))}
             </div>
@@ -427,21 +556,71 @@ function EventWizard({
     const saved = localStorage.getItem(storageKey);
     return saved ? { ...defaultDraft, ...JSON.parse(saved) } : defaultDraft;
   });
+  const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
+  const [extraName, setExtraName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(draft));
   }, [draft, storageKey]);
+  useEffect(() => {
+    if (Object.keys(draft.selectedMemberIds).length) return;
+    setDraft((current) => ({
+      ...current,
+      selectedMemberIds: Object.fromEntries(group.members.map((member) => [member.id, true]))
+    }));
+  }, [draft.selectedMemberIds, group.members]);
+  useEffect(() => {
+    if (!group.slackDestination?.id) return;
+    api<SlackUser[]>(`/api/slack-destinations/${group.slackDestination.id}/users`)
+      .then(setSlackUsers)
+      .catch(() => setSlackUsers([]));
+  }, [group.slackDestination?.id]);
 
   const amounts = useMemo(() => {
-    return group.members.map((member) => ({
-      memberId: member.id,
+    const groupRows = group.members
+      .filter((member) => draft.selectedMemberIds[member.id])
+      .map((member) => ({
+        key: member.id,
+        memberId: member.id,
+        name: member.name,
+        slackUserId: member.slackUserId,
+        slackDisplayName: member.slackDisplayName,
+        amount:
+          draft.amountMode === "same"
+            ? Number(draft.sameAmount || 0)
+            : Number(draft.memberAmounts[member.id] || 0)
+      }));
+    const guestRows = draft.extraMembers.map((member) => ({
+      key: member.key,
+      memberId: null,
       name: member.name,
-      amount: draft.amountMode === "same" ? Number(draft.sameAmount || 0) : Number(draft.memberAmounts[member.id] || 0)
+      slackUserId: member.slackUserId || null,
+      slackDisplayName: member.slackDisplayName || null,
+      amount:
+        draft.amountMode === "same"
+          ? Number(draft.sameAmount || 0)
+          : Number(draft.memberAmounts[member.key] || 0)
     }));
+    return [...groupRows, ...guestRows];
   }, [draft, group.members]);
   const positiveAmounts = [...new Set(amounts.filter((item) => item.amount > 0).map((item) => item.amount))].sort((a, b) => a - b);
+
+  function addExtra(member: MemberInput) {
+    setDraft((current) => {
+      if (member.slackUserId && current.extraMembers.some((item) => item.slackUserId === member.slackUserId)) return current;
+      if (!member.slackUserId && current.extraMembers.some((item) => item.name === member.name)) return current;
+      return { ...current, extraMembers: [...current.extraMembers, member] };
+    });
+  }
+
+  function addManualExtra() {
+    const name = extraName.trim();
+    if (!name) return;
+    addExtra({ key: crypto.randomUUID(), name, slackUserId: "", slackDisplayName: "" });
+    setExtraName("");
+  }
 
   async function create() {
     setLoading(true);
@@ -453,7 +632,17 @@ function EventWizard({
           title: draft.title,
           description: draft.description,
           amountMode: draft.amountMode,
-          memberAmounts: amounts.map((item) => ({ memberId: item.memberId, amount: item.amount })),
+          memberAmounts: amounts
+            .filter((item) => item.memberId)
+            .map((item) => ({ memberId: item.memberId, amount: item.amount })),
+          extraMembers: amounts
+            .filter((item) => !item.memberId)
+            .map((item) => ({
+              name: item.name,
+              slackUserId: item.slackUserId,
+              slackDisplayName: item.slackDisplayName,
+              amount: item.amount
+            })),
           paypayLinks: positiveAmounts
             .map((amount) => ({ amount, url: draft.paypayLinks[String(amount)]?.trim() ?? "" }))
             .filter((link) => link.url)
@@ -491,6 +680,84 @@ function EventWizard({
           <Field label="説明">
             <textarea className={`${inputClass()} min-h-20`} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
           </Field>
+          <section className="grid gap-3 rounded-lg border border-line bg-white p-4">
+            <div>
+              <h3 className="font-black">参加メンバー</h3>
+              <p className="mt-1 text-sm text-ink/60">グループから今回の対象者を選び、必要なら今回だけのメンバーを追加します。</p>
+            </div>
+            <div className="grid gap-2">
+              {group.members.map((member) => (
+                <label key={member.id} className="flex min-h-11 items-center justify-between gap-3 rounded-lg bg-paper px-3 py-2 text-sm font-bold">
+                  <span>
+                    {member.name}
+                    {member.slackUserId ? <span className="ml-2 text-xs text-leaf">Slack</span> : null}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.selectedMemberIds[member.id])}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        selectedMemberIds: { ...draft.selectedMemberIds, [member.id]: e.target.checked }
+                      })
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            {group.slackDestination && slackUsers.length ? (
+              <details className="rounded-lg bg-paper p-3">
+                <summary className="cursor-pointer text-sm font-bold">Slackから今回だけ追加</summary>
+                <div className="mt-3 grid max-h-52 gap-2 overflow-auto">
+                  {slackUsers.map((user) => (
+                    <button
+                      type="button"
+                      key={user.id}
+                      className="focus-ring flex items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm"
+                      onClick={() =>
+                        addExtra({
+                          key: `slack-${user.id}`,
+                          name: user.name,
+                          slackUserId: user.id,
+                          slackDisplayName: user.name
+                        })
+                      }
+                    >
+                      <span>{user.name}</span>
+                      <UserPlus size={18} />
+                    </button>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <input className={inputClass()} placeholder="今回だけ追加する人" value={extraName} onChange={(e) => setExtraName(e.target.value)} />
+              <Button type="button" variant="secondary" onClick={addManualExtra}>
+                <Plus size={18} />
+              </Button>
+            </div>
+            {draft.extraMembers.length ? (
+              <div className="flex flex-wrap gap-2">
+                {draft.extraMembers.map((member) => (
+                  <span key={member.key} className="inline-flex items-center gap-2 rounded-full border border-line bg-paper px-3 py-1 text-sm">
+                    {member.name}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          extraMembers: draft.extraMembers.filter((item) => item.key !== member.key)
+                        })
+                      }
+                      aria-label={`${member.name}を削除`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </section>
           <div className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-white p-1">
             <Button type="button" variant={draft.amountMode === "same" ? "primary" : "ghost"} onClick={() => setDraft({ ...draft, amountMode: "same" })}>
               全員同額
@@ -505,17 +772,17 @@ function EventWizard({
             </Field>
           ) : (
             <div className="grid gap-3">
-              {group.members.map((member) => (
-                <Field label={member.name} key={member.id}>
+              {amounts.map((member) => (
+                <Field label={member.name} key={member.key}>
                   <input
                     type="number"
                     min={0}
                     className={inputClass()}
-                    value={draft.memberAmounts[member.id] || ""}
+                    value={draft.memberAmounts[member.key] || ""}
                     onChange={(e) =>
                       setDraft({
                         ...draft,
-                        memberAmounts: { ...draft.memberAmounts, [member.id]: Number(e.target.value) }
+                        memberAmounts: { ...draft.memberAmounts, [member.key]: Number(e.target.value) }
                       })
                     }
                   />
@@ -642,7 +909,10 @@ function EventPage({ token }: { token: string }) {
           <div key={member.id} className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-lg font-black">{member.name}</p>
+                <p className="text-lg font-black">
+                  {member.name}
+                  {member.memberType === "guest" ? <span className="ml-2 text-xs text-ink/50">今回のみ</span> : null}
+                </p>
                 <p className="text-sm text-ink/60">{member.amount > 0 ? `${yen.format(member.amount)}円` : "対象外"}</p>
               </div>
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${member.amount <= 0 ? "bg-line text-ink/60" : member.status === "paid" ? "bg-mint text-leaf" : "bg-coral/10 text-coral"}`}>
@@ -657,14 +927,33 @@ function EventPage({ token }: { token: string }) {
                   </a>
                 ) : null}
                 {member.paypayLink ? <p className="text-sm font-bold text-ink/70">リンクが使えない場合</p> : null}
-                <div className="rounded-lg bg-paper p-3">
-                  <p className="text-xs font-bold text-ink/60">PayPay送金先情報</p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.paypayInfo}`}</p>
-                </div>
+                {event.paypayInfo ? (
+                  <div className="rounded-lg bg-paper p-3">
+                    <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
+                      <CreditCard size={14} /> PayPay送金先情報
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.paypayInfo}`}</p>
+                  </div>
+                ) : null}
+                {event.bankInfo ? (
+                  <div className="rounded-lg bg-paper p-3">
+                    <p className="flex items-center gap-2 text-xs font-bold text-ink/60">
+                      <Building2 size={14} /> 振込先情報
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{`${event.payeeName}\n${event.bankInfo}`}</p>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2">
-                  <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.paypayInfo}`)}>
-                    <Clipboard size={18} /> コピー
-                  </Button>
+                  {event.paypayInfo ? (
+                    <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.paypayInfo}`)}>
+                      <Clipboard size={18} /> PayPay情報
+                    </Button>
+                  ) : null}
+                  {event.bankInfo ? (
+                    <Button variant="secondary" onClick={() => navigator.clipboard.writeText(`${event.payeeName}\n${event.bankInfo}`)}>
+                      <Clipboard size={18} /> 振込先
+                    </Button>
+                  ) : null}
                   <Button variant="secondary" onClick={() => navigator.clipboard.writeText(String(member.amount))}>
                     <Clipboard size={18} /> {yen.format(member.amount)}円
                   </Button>
