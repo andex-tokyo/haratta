@@ -280,9 +280,6 @@ function Home() {
             <button className="focus-ring rounded-lg px-3 py-2 text-sm font-bold text-ink/70 hover:bg-mint" onClick={() => go("/slack-destinations")}>
               Slack通知先
             </button>
-            <button className="focus-ring rounded-lg px-3 py-2 text-sm font-bold text-ink/70 hover:bg-mint" onClick={() => go("/slack-destinations/new")}>
-              Slack通知先を追加
-            </button>
           </div>
         </div>
       </section>
