@@ -79,6 +79,7 @@ type EventDetail = {
   title: string;
   description: string;
   groupName: string;
+  groupPublicToken: string;
   payeeName: string;
   paypayInfo: string;
   bankInfo: string;
@@ -101,6 +102,18 @@ type EventDetail = {
     paypayLink: string | null;
   }[];
   paypayLinks: { amount: number; url: string }[];
+};
+
+type EventEditMember = {
+  key: string;
+  id: string | null;
+  groupMemberId: string | null;
+  name: string;
+  slackUserId: string | null;
+  slackDisplayName: string | null;
+  memberType: "group" | "guest";
+  amount: number;
+  status?: "unpaid" | "paid";
 };
 
 type Draft = {
@@ -1141,6 +1154,7 @@ function GroupManage({
 function EventPage({ token }: { token: string }) {
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
   const load = () => api<EventDetail>(`/api/events/${token}`).then(setEvent).catch((e) => setError(e.message));
   useEffect(() => {
     void load();
@@ -1172,6 +1186,18 @@ function EventPage({ token }: { token: string }) {
     <Shell>
       <TopBar title={event.title} />
       {error ? <Alert>{error}</Alert> : null}
+      {editing ? (
+        <EventEdit
+          event={event}
+          onCancel={() => setEditing(false)}
+          onSaved={(updated) => {
+            setEvent(updated);
+            setEditing(false);
+          }}
+          onDeleted={() => go(`/g/${event.groupPublicToken}`)}
+        />
+      ) : (
+        <>
       <section className="rounded-lg border border-line bg-white p-4 shadow-soft">
         <p className="text-sm font-bold text-leaf">{event.groupName}</p>
         <h1 className="mt-2 text-3xl font-black">{event.title}</h1>
@@ -1182,6 +1208,9 @@ function EventPage({ token }: { token: string }) {
           <Metric label="未払い" value={`${event.summary.unpaidCount}`} />
         </div>
       </section>
+      <Button variant="secondary" onClick={() => setEditing(true)}>
+        イベントを編集・削除
+      </Button>
 
       <section className="grid gap-3">
         {event.members.map((member) => (
@@ -1256,7 +1285,233 @@ function EventPage({ token }: { token: string }) {
           </div>
         ))}
       </section>
+        </>
+      )}
     </Shell>
+  );
+}
+
+function EventEdit({
+  event,
+  onSaved,
+  onDeleted,
+  onCancel
+}: {
+  event: EventDetail;
+  onSaved: (event: EventDetail) => void;
+  onDeleted: () => void;
+  onCancel: () => void;
+}) {
+  const [group, setGroup] = useState<Group | null>(null);
+  const [title, setTitle] = useState(event.title);
+  const [description, setDescription] = useState(event.description);
+  const [managementPassword, setManagementPassword] = useState("");
+  const [members, setMembers] = useState<EventEditMember[]>(
+    event.members.map((member) => ({
+      key: member.id,
+      id: member.id,
+      groupMemberId: member.groupMemberId,
+      name: member.name,
+      slackUserId: member.slackUserId,
+      slackDisplayName: member.slackDisplayName,
+      memberType: member.memberType,
+      amount: member.amount,
+      status: member.status
+    }))
+  );
+  const [guestName, setGuestName] = useState("");
+  const [paypayLinks, setPaypayLinks] = useState<Record<string, string>>(
+    Object.fromEntries(event.paypayLinks.map((link) => [String(link.amount), link.url]))
+  );
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    api<Group>(`/api/groups/${event.groupPublicToken}`).then(setGroup).catch(() => undefined);
+  }, [event.groupPublicToken]);
+
+  const positiveAmounts = [...new Set(members.filter((member) => member.amount > 0).map((member) => member.amount))].sort((a, b) => a - b);
+  const selectedGroupMemberIds = new Set(members.map((member) => member.groupMemberId).filter(Boolean));
+
+  function addGroupMember(member: Group["members"][number]) {
+    if (selectedGroupMemberIds.has(member.id)) return;
+    setMembers((current) => [
+      ...current,
+      {
+        key: `group-${member.id}`,
+        id: null,
+        groupMemberId: member.id,
+        name: member.name,
+        slackUserId: member.slackUserId,
+        slackDisplayName: member.slackDisplayName,
+        memberType: "group",
+        amount: 0
+      }
+    ]);
+  }
+
+  function addGuest() {
+    const name = guestName.trim();
+    if (!name) return;
+    setMembers((current) => [
+      ...current,
+      {
+        key: crypto.randomUUID(),
+        id: null,
+        groupMemberId: null,
+        name,
+        slackUserId: null,
+        slackDisplayName: null,
+        memberType: "guest",
+        amount: 0
+      }
+    ]);
+    setGuestName("");
+  }
+
+  async function save(eventForm: FormEvent) {
+    eventForm.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await api<EventDetail>(`/api/events/${event.publicToken}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          managementPassword,
+          title,
+          description,
+          members: members.map((member) => ({
+            id: member.id,
+            groupMemberId: member.groupMemberId,
+            name: member.name,
+            slackUserId: member.slackUserId,
+            slackDisplayName: member.slackDisplayName,
+            amount: member.amount
+          })),
+          paypayLinks: positiveAmounts
+            .map((amount) => ({ amount, url: paypayLinks[String(amount)]?.trim() ?? "" }))
+            .filter((link) => link.url)
+        })
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeEvent() {
+    if (!window.confirm("このイベントを削除します。元に戻せません。")) return;
+    setLoading(true);
+    setError("");
+    try {
+      await api(`/api/events/${event.publicToken}`, {
+        method: "DELETE",
+        body: JSON.stringify({ managementPassword })
+      });
+      onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form className="grid gap-4" onSubmit={save}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xl font-black">イベント編集</h2>
+        <Button type="button" variant="ghost" onClick={onCancel}>閉じる</Button>
+      </div>
+      {error ? <Alert>{error}</Alert> : null}
+      <Field label="管理パスワード">
+        <input type="password" className={inputClass()} value={managementPassword} onChange={(e) => setManagementPassword(e.target.value)} />
+      </Field>
+      <Field label="イベント名">
+        <input className={inputClass()} value={title} onChange={(e) => setTitle(e.target.value)} />
+      </Field>
+      <Field label="説明">
+        <textarea className={`${inputClass()} min-h-20`} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </Field>
+
+      <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h3 className="font-black">参加メンバーと金額</h3>
+        <div className="grid gap-2">
+          {members.map((member) => (
+            <div key={member.key} className="grid gap-2 rounded-lg bg-paper p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-bold">
+                    {member.name}
+                    {member.memberType === "guest" ? <span className="ml-2 text-xs text-ink/50">今回のみ</span> : null}
+                    {member.status === "paid" ? <span className="ml-2 text-xs text-leaf">支払い済み</span> : null}
+                  </p>
+                </div>
+                <Button type="button" variant="danger" className="w-11 px-0" onClick={() => setMembers((current) => current.filter((item) => item.key !== member.key))}>
+                  <Trash2 size={18} />
+                </Button>
+              </div>
+              {member.memberType === "guest" ? (
+                <input
+                  className={inputClass()}
+                  value={member.name}
+                  onChange={(e) => setMembers((current) => current.map((item) => item.key === member.key ? { ...item, name: e.target.value } : item))}
+                />
+              ) : null}
+              <Field label="金額">
+                <input
+                  type="number"
+                  min={0}
+                  className={inputClass()}
+                  value={member.amount || ""}
+                  onChange={(e) => setMembers((current) => current.map((item) => item.key === member.key ? { ...item, amount: Number(e.target.value) } : item))}
+                />
+              </Field>
+            </div>
+          ))}
+        </div>
+        {group ? (
+          <details className="rounded-lg bg-paper p-3">
+            <summary className="cursor-pointer text-sm font-bold">グループメンバーを追加</summary>
+            <div className="mt-3 grid gap-2">
+              {group.members.filter((member) => !selectedGroupMemberIds.has(member.id)).map((member) => (
+                <button key={member.id} type="button" className="focus-ring flex items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm" onClick={() => addGroupMember(member)}>
+                  <span className="font-bold">{member.name}</span>
+                  <UserPlus size={18} />
+                </button>
+              ))}
+              {group.members.every((member) => selectedGroupMemberIds.has(member.id)) ? (
+                <p className="text-sm text-ink/50">追加できるグループメンバーはいません。</p>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <input className={inputClass()} placeholder="今回だけ追加する人" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
+          <Button type="button" variant="secondary" onClick={addGuest}><Plus size={18} /></Button>
+        </div>
+      </section>
+
+      <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h3 className="font-black">PayPay支払いリンク</h3>
+        {positiveAmounts.map((amount) => (
+          <Field key={amount} label={`${yen.format(amount)}円用リンク`}>
+            <input
+              className={inputClass()}
+              value={paypayLinks[String(amount)] ?? ""}
+              onChange={(e) => setPaypayLinks({ ...paypayLinks, [String(amount)]: e.target.value })}
+            />
+          </Field>
+        ))}
+        {positiveAmounts.length === 0 ? <Empty text="1円以上の対象者がいません。" /> : null}
+      </section>
+
+      <Button disabled={loading}><Check size={18} /> 保存</Button>
+      <Button type="button" variant="danger" disabled={loading} onClick={removeEvent}>
+        <Trash2 size={18} /> イベントを削除
+      </Button>
+    </form>
   );
 }
 

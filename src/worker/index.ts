@@ -271,7 +271,7 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
   const event = await db
     .prepare(
       `SELECT e.*, g.name AS group_name, g.default_payee_name, g.default_paypay_info
-        , g.default_bank_info
+        , g.public_token AS group_public_token, g.default_bank_info
        FROM events e
        JOIN groups g ON g.id = e.group_id
        WHERE e.public_token = ?`
@@ -280,6 +280,7 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
     .first<
       EventRow & {
         group_name: string;
+        group_public_token: string;
         default_payee_name: string;
         default_paypay_info: string;
         default_bank_info: string;
@@ -308,6 +309,7 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
     title: event.title,
     description: event.description,
     groupName: event.group_name,
+    groupPublicToken: event.group_public_token,
     payeeName: event.default_payee_name,
     paypayInfo: event.default_paypay_info,
     bankInfo: event.default_bank_info,
@@ -870,6 +872,195 @@ app.get("/api/events/:eventToken", async (c) => {
   const response = await buildEventResponse(c.env.DB, c.req.param("eventToken"));
   if (!response) return jsonError("イベントが見つかりません", 404);
   return c.json(response);
+});
+
+app.patch("/api/events/:eventToken", async (c) => {
+  const event = await c.env.DB.prepare(
+    `SELECT e.*, g.management_password_hash
+     FROM events e
+     JOIN groups g ON g.id = e.group_id
+     WHERE e.public_token = ?`
+  )
+    .bind(c.req.param("eventToken"))
+    .first<EventRow & { management_password_hash: string | null }>();
+  if (!event) return jsonError("イベントが見つかりません", 404);
+
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!body) return jsonError("Invalid JSON");
+  if (!(await passwordMatches(text(body.managementPassword), event.management_password_hash))) {
+    return jsonError("管理パスワードが違います", 403);
+  }
+
+  const title = text(body.title);
+  const description = optionalText(body.description);
+  const members = Array.isArray(body.members) ? body.members : [];
+  const paypayLinks = Array.isArray(body.paypayLinks) ? body.paypayLinks : [];
+  if (!title) return jsonError("イベント名を入力してください");
+  if (members.length < 1) return jsonError("参加メンバーを1人以上入力してください");
+
+  const currentMembers = (
+    await c.env.DB.prepare("SELECT * FROM event_members WHERE event_id = ?")
+      .bind(event.id)
+      .all<EventMemberRow>()
+  ).results;
+  const currentById = new Map(currentMembers.map((member) => [member.id, member]));
+  const groupMembers = (
+    await c.env.DB.prepare("SELECT id, name, slack_user_id, slack_display_name, created_at FROM group_members WHERE group_id = ?")
+      .bind(event.group_id)
+      .all<GroupMemberRow>()
+  ).results;
+  const groupMemberMap = new Map(groupMembers.map((member) => [member.id, member]));
+
+  const parsedMembers: {
+    id: string | null;
+    groupMemberId: string | null;
+    name: string;
+    slackUserId: string | null;
+    slackDisplayName: string | null;
+    memberType: "group" | "guest";
+    amount: number;
+  }[] = [];
+  for (const item of members) {
+    const row = asObject(item);
+    const existingId = text(row?.id) || null;
+    const groupMemberId = text(row?.groupMemberId) || null;
+    const amount = intAmount(row?.amount);
+    if (amount === null) return jsonError("金額は0以上の整数で入力してください");
+    if (existingId && !currentById.has(existingId)) return jsonError("不正なイベントメンバーが含まれています");
+
+    if (groupMemberId) {
+      const groupMember = groupMemberMap.get(groupMemberId);
+      if (!groupMember) return jsonError("不正なグループメンバーが含まれています");
+      parsedMembers.push({
+        id: existingId,
+        groupMemberId,
+        name: groupMember.name,
+        slackUserId: groupMember.slack_user_id,
+        slackDisplayName: groupMember.slack_display_name,
+        memberType: "group",
+        amount
+      });
+    } else {
+      const name = text(row?.name);
+      if (!name) return jsonError("追加メンバー名を入力してください");
+      parsedMembers.push({
+        id: existingId,
+        groupMemberId: null,
+        name,
+        slackUserId: text(row?.slackUserId) || null,
+        slackDisplayName: text(row?.slackDisplayName) || null,
+        memberType: "guest",
+        amount
+      });
+    }
+  }
+  const groupMemberIds = parsedMembers.filter((member) => member.groupMemberId).map((member) => member.groupMemberId);
+  if (new Set(groupMemberIds).size !== groupMemberIds.length) return jsonError("同じグループメンバーが重複しています");
+
+  const parsedLinks: { amount: number; url: string }[] = [];
+  for (const item of paypayLinks) {
+    const row = asObject(item);
+    const amount = intAmount(row?.amount);
+    const url = text(row?.url);
+    if (amount === null || amount <= 0) return jsonError("PayPayリンクの金額が不正です");
+    if (!url) continue;
+    if (!validUrl(url)) return jsonError("PayPay支払いリンクのURL形式が不正です");
+    parsedLinks.push({ amount, url });
+  }
+  if (new Set(parsedLinks.map((link) => link.amount)).size !== parsedLinks.length) {
+    return jsonError("同じ金額のPayPay支払いリンクが重複しています");
+  }
+  const positiveAmounts = new Set(parsedMembers.filter((member) => member.amount > 0).map((member) => member.amount));
+  if (parsedLinks.some((link) => !positiveAmounts.has(link.amount))) {
+    return jsonError("対象金額にないPayPay支払いリンクが含まれています");
+  }
+
+  const updatedAt = nowIso();
+  const incomingIds = new Set(parsedMembers.map((member) => member.id).filter(Boolean));
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare("UPDATE events SET title = ?, description = ?, updated_at = ? WHERE id = ?").bind(
+      title,
+      description,
+      updatedAt,
+      event.id
+    ),
+    ...currentMembers
+      .filter((member) => !incomingIds.has(member.id))
+      .map((member) => c.env.DB.prepare("DELETE FROM event_members WHERE id = ? AND event_id = ?").bind(member.id, event.id)),
+    c.env.DB.prepare("DELETE FROM event_paypay_links WHERE event_id = ?").bind(event.id),
+    ...parsedMembers.map((member) => {
+      if (member.id) {
+        const current = currentById.get(member.id);
+        const amountChanged = current?.amount !== member.amount;
+        return c.env.DB.prepare(
+          `UPDATE event_members
+           SET group_member_id = ?, name = ?, slack_user_id = ?, slack_display_name = ?, member_type = ?,
+               amount = ?, status = ?, paid_at = ?, updated_at = ?
+           WHERE id = ? AND event_id = ?`
+        ).bind(
+          member.groupMemberId,
+          member.name,
+          member.slackUserId,
+          member.slackDisplayName,
+          member.memberType,
+          member.amount,
+          amountChanged ? "unpaid" : current?.status ?? "unpaid",
+          amountChanged ? null : current?.paid_at ?? null,
+          updatedAt,
+          member.id,
+          event.id
+        );
+      }
+      return c.env.DB.prepare(
+        `INSERT INTO event_members
+         (id, event_id, group_member_id, name, slack_user_id, slack_display_name, member_type, amount, status, paid_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', NULL, ?, ?)`
+      ).bind(
+        id(),
+        event.id,
+        member.groupMemberId,
+        member.name,
+        member.slackUserId,
+        member.slackDisplayName,
+        member.memberType,
+        member.amount,
+        updatedAt,
+        updatedAt
+      );
+    }),
+    ...parsedLinks.map((link) =>
+      c.env.DB.prepare(
+        "INSERT INTO event_paypay_links (id, event_id, amount, url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+      ).bind(id(), event.id, link.amount, link.url, updatedAt, updatedAt)
+    )
+  ];
+  await c.env.DB.batch(statements);
+
+  const response = await buildEventResponse(c.env.DB, c.req.param("eventToken"));
+  return c.json(response);
+});
+
+app.delete("/api/events/:eventToken", async (c) => {
+  const event = await c.env.DB.prepare(
+    `SELECT e.*, g.management_password_hash
+     FROM events e
+     JOIN groups g ON g.id = e.group_id
+     WHERE e.public_token = ?`
+  )
+    .bind(c.req.param("eventToken"))
+    .first<EventRow & { management_password_hash: string | null }>();
+  if (!event) return jsonError("イベントが見つかりません", 404);
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!(await passwordMatches(text(body?.managementPassword), event.management_password_hash))) {
+    return jsonError("管理パスワードが違います", 403);
+  }
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM slack_notification_logs WHERE event_id = ?").bind(event.id),
+    c.env.DB.prepare("DELETE FROM event_paypay_links WHERE event_id = ?").bind(event.id),
+    c.env.DB.prepare("DELETE FROM event_members WHERE event_id = ?").bind(event.id),
+    c.env.DB.prepare("DELETE FROM events WHERE id = ?").bind(event.id)
+  ]);
+  return c.json({ ok: true });
 });
 
 app.patch("/api/events/:eventToken/members/:memberId/status", async (c) => {
