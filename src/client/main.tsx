@@ -489,26 +489,40 @@ function PaymentProfileEdit({ profile, onSaved }: { profile: PaymentProfile; onS
 }
 
 function Tutorial() {
-  const steps = [
+  const payerSteps = [
     {
-      title: "1. グループを作る",
-      body: "よく精算するメンバーをまとめます。Slackユーザーを選ぶと通知でメンションできます。Slackにいない人は名前だけで追加できます。"
+      title: "1. 支払先を用意する",
+      body: "自分のPayPay ID、電話番号、プロフィールURLなどを支払先に登録します。振込も受け付ける場合だけ口座情報も入れます。支払先管理パスワードは、この支払先情報を直す時に使います。"
     },
     {
-      title: "2. 支払先を登録する",
-      body: "PayPay ID、電話番号、プロフィールURLなど、支払う人が送金先を特定できる情報を入れます。振込も受け付ける場合だけ口座情報を追加します。"
+      title: "2. グループを選ぶ",
+      body: "既存グループからイベントを作ります。初回だけグループを作り、メンバーとデフォルト支払先を設定します。グループ管理パスワードは、メンバーやSlack通知先を直す時に使います。"
     },
     {
       title: "3. イベントを作る",
-      body: "飲み会、チケット代、備品代などの精算単位でイベントを作ります。グループメンバーから対象者を選び、今回だけの人も追加できます。"
+      body: "飲み会、チケット代、備品代などの精算単位でイベントを作ります。支払先、対象メンバー、金額、PayPay支払いリンクを入れます。イベント管理パスワードは、このイベントを直す時に使います。"
     },
     {
-      title: "4. 金額とPayPayリンクを入れる",
-      body: "全員同額か個別金額を選びます。同じ金額の人は1つのPayPay支払いリンクを共有できます。リンクがなくても送金先情報と金額コピーで支払えます。"
+      title: "4. イベントURLを共有する",
+      body: "作成後のイベントURLを参加者に共有します。Slack通知先を設定している場合は通知も送れます。"
+    }
+  ];
+  const participantSteps = [
+    {
+      title: "1. イベントURLを開く",
+      body: "共有されたイベントURLを開きます。ログインは不要です。"
     },
     {
-      title: "5. URLを共有して回収する",
-      body: "参加者はイベントURLを開き、自分の金額を確認して支払い後に「支払いました」を押します。ログインは不要です。"
+      title: "2. 自分の金額を見る",
+      body: "自分の名前のカードで金額と状態を確認します。0円の人は対象外として表示され、支払い操作は不要です。"
+    },
+    {
+      title: "3. PayPayで支払う",
+      body: "PayPay支払いリンクがあればそこから支払います。リンクがない、または使えない場合は、支払先情報と金額コピーを使って送金します。"
+    },
+    {
+      title: "4. 支払いましたを押す",
+      body: "支払い後に「支払いました」を押します。間違えた場合は「未払いに戻す」で戻せます。"
     }
   ];
 
@@ -519,12 +533,45 @@ function Tutorial() {
         <p className="text-sm font-bold text-leaf">初めて使う人向け</p>
         <h1 className="text-3xl font-black">ハラッタ？の流れ</h1>
         <p className="text-sm leading-6 text-ink/70">
-          幹事はグループとイベントを作り、参加者はURLから支払い状況を更新します。お金はこのアプリ内では扱いません。
+          建て替えた人は支払先とイベントを用意します。支払う人はイベントURLだけ見れば支払いできます。お金はこのアプリ内では扱いません。
         </p>
       </section>
 
+      <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h2 className="text-xl font-black">建て替えた人が見るところ</h2>
+        <p className="text-sm leading-6 text-ink/70">回収する人、幹事、イベントを作る人向けです。</p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Button variant="secondary" onClick={() => go("/payment-profiles")}>
+            <CreditCard size={18} /> 支払先
+          </Button>
+          <Button variant="secondary" onClick={() => go("/groups")}>
+            <Users size={18} /> グループ
+          </Button>
+          <Button onClick={() => go("/groups/new")}>
+            <Plus size={18} /> グループ作成
+          </Button>
+        </div>
+      </section>
+
       <section className="grid gap-3">
-        {steps.map((step) => (
+        <h2 className="text-xl font-black">建て替えた人の手順</h2>
+        {payerSteps.map((step) => (
+          <article key={step.title} className="rounded-lg border border-line bg-white p-4 shadow-soft">
+            <h2 className="font-black">{step.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-ink/70">{step.body}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="grid gap-3">
+        <h2 className="text-xl font-black">支払う人が見るところ</h2>
+        <article className="rounded-lg border border-line bg-white p-4 shadow-soft">
+          <h3 className="font-black">共有されたイベントURL</h3>
+          <p className="mt-2 text-sm leading-6 text-ink/70">
+            支払う人はグループ一覧や支払先一覧を見る必要はありません。幹事から共有されたイベントページで、自分の金額、PayPayリンク、支払い状態だけ確認します。
+          </p>
+        </article>
+        {participantSteps.map((step) => (
           <article key={step.title} className="rounded-lg border border-line bg-white p-4 shadow-soft">
             <h2 className="font-black">{step.title}</h2>
             <p className="mt-2 text-sm leading-6 text-ink/70">{step.body}</p>
@@ -533,20 +580,21 @@ function Tutorial() {
       </section>
 
       <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
-        <h2 className="font-black">覚えておくこと</h2>
+        <h2 className="font-black">3つの管理パスワード</h2>
         <div className="grid gap-2 text-sm leading-6 text-ink/70">
-          <p>管理パスワードはグループやイベントを編集・削除する人だけが使います。</p>
+          <p>グループ管理パスワード: メンバー、Slack通知先、デフォルト支払先、グループ削除に使います。</p>
+          <p>イベント管理パスワード: イベント名、対象者、金額、PayPayリンク、支払先、イベント削除に使います。</p>
+          <p>支払先管理パスワード: PayPay送金先情報、振込先情報、支払先名、支払先削除に使います。</p>
           <p>PayPay支払いリンクは任意です。期限切れやリンク未登録でも、送金先情報を見て支払えます。</p>
-          <p>Slack通知先は必要になった時だけ設定すれば十分です。</p>
         </div>
       </section>
 
       <div className="grid gap-2 sm:grid-cols-2">
+        <Button variant="secondary" onClick={() => go("/payment-profiles")}>
+          <CreditCard size={18} /> 支払先を見る
+        </Button>
         <Button onClick={() => go("/groups")}>
           <Users size={18} /> グループを選ぶ
-        </Button>
-        <Button variant="secondary" onClick={() => go("/groups/new")}>
-          <Plus size={18} /> グループを作成
         </Button>
       </div>
     </Shell>
