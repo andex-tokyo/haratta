@@ -39,15 +39,6 @@ type MemberInput = {
   slackDisplayName: string;
 };
 
-type PayerInput = {
-  key: string;
-  id: string | null;
-  name: string;
-  paypayInfo: string;
-  bankInfo: string;
-  managementPassword: string;
-};
-
 type PaymentProfile = {
   id: string;
   publicToken: string;
@@ -312,6 +303,13 @@ function Home() {
           <Button variant="secondary" onClick={() => go("/groups/new")} className="justify-between">
             <span className="inline-flex items-center gap-2">
               <Users size={18} /> 新しいグループを作成
+            </span>
+            <ChevronRight size={18} />
+          </Button>
+
+          <Button variant="secondary" onClick={() => go("/payment-profiles")} className="justify-between">
+            <span className="inline-flex items-center gap-2">
+              <CreditCard size={18} /> 支払先を作成・編集
             </span>
             <ChevronRight size={18} />
           </Button>
@@ -714,21 +712,26 @@ function NewSlackDestination() {
 function NewGroup() {
   const [destinations, setDestinations] = useState<SlackDestination[]>([]);
   const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
+  const [paymentProfiles, setPaymentProfiles] = useState<PaymentProfile[]>([]);
   const [manualName, setManualName] = useState("");
   const [form, setForm] = useState({
     name: "",
     managementPassword: "",
+    defaultPaymentProfileId: "",
     slackDestinationId: ""
   });
   const [members, setMembers] = useState<MemberInput[]>([]);
-  const [payers, setPayers] = useState<PayerInput[]>([
-    { key: crypto.randomUUID(), id: null, name: "", paypayInfo: "", bankInfo: "", managementPassword: "" }
-  ]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     api<SlackDestination[]>("/api/slack-destinations").then(setDestinations).catch(() => undefined);
+    api<PaymentProfile[]>("/api/payment-profiles").then(setPaymentProfiles).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (!form.defaultPaymentProfileId && paymentProfiles[0]?.id) {
+      setForm((current) => ({ ...current, defaultPaymentProfileId: paymentProfiles[0].id }));
+    }
+  }, [form.defaultPaymentProfileId, paymentProfiles]);
   useEffect(() => {
     if (!form.slackDestinationId) {
       setSlackUsers([]);
@@ -763,12 +766,6 @@ function NewGroup() {
         method: "POST",
         body: JSON.stringify({
           ...form,
-          paymentProfiles: payers.map((payer) => ({
-            displayName: payer.name,
-            paypayInfo: payer.paypayInfo,
-            bankInfo: payer.bankInfo,
-            managementPassword: payer.managementPassword
-          })),
           members: members.map((member) => ({
             name: member.name,
             slackUserId: member.slackUserId || null,
@@ -805,6 +802,18 @@ function NewGroup() {
             ))}
           </select>
         </Field>
+        <Field label="デフォルト支払先" hint="イベント作成時の初期支払先です。支払先はトップの「支払先」から作成できます。">
+          <select className={inputClass()} value={form.defaultPaymentProfileId} onChange={(e) => setForm({ ...form, defaultPaymentProfileId: e.target.value })}>
+            {paymentProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.displayName}</option>
+            ))}
+          </select>
+        </Field>
+        {paymentProfiles.length === 0 ? (
+          <Button type="button" variant="secondary" onClick={() => go("/payment-profiles")}>
+            <CreditCard size={18} /> 支払先を先に作成
+          </Button>
+        ) : null}
 
         <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
           <div>
@@ -857,74 +866,11 @@ function NewGroup() {
           </div>
         </section>
 
-        <PayerEditor payers={payers} onChange={setPayers} requirePassword />
         <Button disabled={loading}>
           <Check size={18} /> 作成
         </Button>
       </form>
     </Shell>
-  );
-}
-
-function PayerEditor({
-  payers,
-  onChange,
-  requirePassword = false
-}: {
-  payers: PayerInput[];
-  onChange: (payers: PayerInput[]) => void;
-  requirePassword?: boolean;
-}) {
-  function update(key: string, patch: Partial<PayerInput>) {
-    onChange(payers.map((payer) => (payer.key === key ? { ...payer, ...patch } : payer)));
-  }
-
-  return (
-    <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
-      <div>
-        <h2 className="font-black">支払先</h2>
-        <p className="mt-1 text-sm text-ink/60">イベントで選ぶ支払先プロフィールです。支払先情報の編集には支払先管理パスワードを使います。</p>
-      </div>
-      <div className="grid gap-3">
-        {payers.map((payer, index) => (
-          <div key={payer.key} className="grid gap-3 rounded-lg bg-paper p-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-bold">支払先 {index + 1}</p>
-              <Button
-                type="button"
-                variant="danger"
-                className="w-11 px-0"
-                disabled={payers.length <= 1}
-                onClick={() => onChange(payers.filter((item) => item.key !== payer.key))}
-              >
-                <Trash2 size={18} />
-              </Button>
-            </div>
-            <Field label="名前">
-              <input className={inputClass()} value={payer.name} onChange={(e) => update(payer.key, { name: e.target.value })} />
-            </Field>
-            <Field label="PayPay送金先情報" hint="PayPay ID、電話番号、PayPayプロフィールURLなど。">
-              <textarea className={`${inputClass()} min-h-20`} value={payer.paypayInfo} onChange={(e) => update(payer.key, { paypayInfo: e.target.value })} />
-            </Field>
-            <Field label="振込先情報（任意）" hint="銀行振込も受け付ける場合だけ入力します。">
-              <textarea className={`${inputClass()} min-h-20`} value={payer.bankInfo} onChange={(e) => update(payer.key, { bankInfo: e.target.value })} />
-            </Field>
-            {requirePassword ? (
-              <Field label="支払先管理パスワード" hint="支払先情報の編集・削除に使います。6文字以上。">
-                <input type="password" className={inputClass()} value={payer.managementPassword} onChange={(e) => update(payer.key, { managementPassword: e.target.value })} />
-              </Field>
-            ) : null}
-          </div>
-        ))}
-      </div>
-      <Button
-        type="button"
-        variant="secondary"
-        onClick={() => onChange([...payers, { key: crypto.randomUUID(), id: null, name: "", paypayInfo: "", bankInfo: "", managementPassword: "" }])}
-      >
-        <Plus size={18} /> 支払先を追加
-      </Button>
-    </section>
   );
 }
 
@@ -1025,16 +971,10 @@ function EventWizard({
     return saved ? { ...defaultDraft, ...JSON.parse(saved) } : defaultDraft;
   });
   const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
-  const [paymentProfiles, setPaymentProfiles] = useState<PaymentProfile[]>(group.paymentProfiles);
-  const [newPaymentProfile, setNewPaymentProfile] = useState({
-    displayName: "",
-    paypayInfo: "",
-    bankInfo: "",
-    managementPassword: ""
-  });
   const [extraName, setExtraName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const paymentProfiles = group.paymentProfiles;
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(draft));
@@ -1138,24 +1078,6 @@ function EventWizard({
     }
   }
 
-  async function addPaymentProfile() {
-    setLoading(true);
-    setError("");
-    try {
-      const created = await api<PaymentProfile>("/api/payment-profiles", {
-        method: "POST",
-        body: JSON.stringify(newPaymentProfile)
-      });
-      setPaymentProfiles((current) => [created, ...current]);
-      setDraft((current) => ({ ...current, payerId: created.id }));
-      setNewPaymentProfile({ displayName: "", paypayInfo: "", bankInfo: "", managementPassword: "" });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <section className="grid gap-5">
       <div className="flex items-center justify-between gap-3">
@@ -1186,26 +1108,11 @@ function EventWizard({
               ))}
             </select>
           </Field>
-          <details className="rounded-lg border border-line bg-white p-4">
-            <summary className="cursor-pointer text-sm font-bold">新しい支払先を追加</summary>
-            <div className="mt-3 grid gap-3">
-              <Field label="支払先名">
-                <input className={inputClass()} value={newPaymentProfile.displayName} onChange={(e) => setNewPaymentProfile({ ...newPaymentProfile, displayName: e.target.value })} />
-              </Field>
-              <Field label="PayPay送金先情報">
-                <textarea className={`${inputClass()} min-h-20`} value={newPaymentProfile.paypayInfo} onChange={(e) => setNewPaymentProfile({ ...newPaymentProfile, paypayInfo: e.target.value })} />
-              </Field>
-              <Field label="振込先情報（任意）">
-                <textarea className={`${inputClass()} min-h-20`} value={newPaymentProfile.bankInfo} onChange={(e) => setNewPaymentProfile({ ...newPaymentProfile, bankInfo: e.target.value })} />
-              </Field>
-              <Field label="支払先管理パスワード">
-                <input type="password" className={inputClass()} value={newPaymentProfile.managementPassword} onChange={(e) => setNewPaymentProfile({ ...newPaymentProfile, managementPassword: e.target.value })} />
-              </Field>
-              <Button type="button" variant="secondary" disabled={loading} onClick={addPaymentProfile}>
-                <Plus size={18} /> 支払先を保存して選択
-              </Button>
-            </div>
-          </details>
+          {paymentProfiles.length === 0 ? (
+            <Button type="button" variant="secondary" onClick={() => go("/payment-profiles")}>
+              <CreditCard size={18} /> 支払先を先に作成
+            </Button>
+          ) : null}
           <Field label="イベント管理パスワード" hint="このイベントの編集・削除に使います。グループ管理パスワードとは別です。">
             <input type="password" className={inputClass()} value={draft.eventManagementPassword} onChange={(e) => setDraft({ ...draft, eventManagementPassword: e.target.value })} />
           </Field>
