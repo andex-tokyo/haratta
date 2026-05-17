@@ -213,6 +213,7 @@ function App() {
   if (route === "/slack-destinations/new") return <NewSlackDestination />;
   if (route === "/groups") return <GroupsList />;
   if (route === "/groups/new") return <NewGroup />;
+  if (route === "/tutorial") return <Tutorial />;
   if (route.startsWith("/g/")) return <GroupDetail token={route.split("/")[2]} />;
   if (route.startsWith("/e/")) return <EventPage token={route.split("/")[2]} />;
   return <Home />;
@@ -304,6 +305,13 @@ function Home() {
             </span>
             <ChevronRight size={18} />
           </Button>
+
+          <Button variant="ghost" onClick={() => go("/tutorial")} className="justify-between">
+            <span className="inline-flex items-center gap-2">
+              <Check size={18} /> 初めての使い方を見る
+            </span>
+            <ChevronRight size={18} />
+          </Button>
         </div>
 
         <div className="mt-auto border-t border-line pt-4">
@@ -315,6 +323,71 @@ function Home() {
           </div>
         </div>
       </section>
+    </Shell>
+  );
+}
+
+function Tutorial() {
+  const steps = [
+    {
+      title: "1. グループを作る",
+      body: "よく精算するメンバーをまとめます。Slackユーザーを選ぶと通知でメンションできます。Slackにいない人は名前だけで追加できます。"
+    },
+    {
+      title: "2. 建て替え者を登録する",
+      body: "PayPay ID、電話番号、プロフィールURLなど、支払う人が送金先を特定できる情報を入れます。振込も受け付ける場合だけ口座情報を追加します。"
+    },
+    {
+      title: "3. イベントを作る",
+      body: "飲み会、チケット代、備品代などの精算単位でイベントを作ります。グループメンバーから対象者を選び、今回だけの人も追加できます。"
+    },
+    {
+      title: "4. 金額とPayPayリンクを入れる",
+      body: "全員同額か個別金額を選びます。同じ金額の人は1つのPayPay支払いリンクを共有できます。リンクがなくても送金先情報と金額コピーで支払えます。"
+    },
+    {
+      title: "5. URLを共有して回収する",
+      body: "参加者はイベントURLを開き、自分の金額を確認して支払い後に「支払いました」を押します。ログインは不要です。"
+    }
+  ];
+
+  return (
+    <Shell>
+      <TopBar title="使い方" />
+      <section className="grid gap-4 rounded-lg border border-line bg-white p-5 shadow-soft">
+        <p className="text-sm font-bold text-leaf">初めて使う人向け</p>
+        <h1 className="text-3xl font-black">ハラッタ？の流れ</h1>
+        <p className="text-sm leading-6 text-ink/70">
+          幹事はグループとイベントを作り、参加者はURLから支払い状況を更新します。お金はこのアプリ内では扱いません。
+        </p>
+      </section>
+
+      <section className="grid gap-3">
+        {steps.map((step) => (
+          <article key={step.title} className="rounded-lg border border-line bg-white p-4 shadow-soft">
+            <h2 className="font-black">{step.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-ink/70">{step.body}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="grid gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+        <h2 className="font-black">覚えておくこと</h2>
+        <div className="grid gap-2 text-sm leading-6 text-ink/70">
+          <p>管理パスワードはグループやイベントを編集・削除する人だけが使います。</p>
+          <p>PayPay支払いリンクは任意です。期限切れやリンク未登録でも、送金先情報を見て支払えます。</p>
+          <p>Slack通知先は必要になった時だけ設定すれば十分です。</p>
+        </div>
+      </section>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Button onClick={() => go("/groups")}>
+          <Users size={18} /> グループを選ぶ
+        </Button>
+        <Button variant="secondary" onClick={() => go("/groups/new")}>
+          <Plus size={18} /> グループを作成
+        </Button>
+      </div>
     </Shell>
   );
 }
