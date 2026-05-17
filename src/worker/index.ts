@@ -18,6 +18,7 @@ type GroupRow = {
   default_payee_name: string;
   default_paypay_info: string;
   default_bank_info: string;
+  default_payment_profile_id: string | null;
   management_password_hash: string | null;
   slack_destination_id: string | null;
   slack_destination_name: string | null;
@@ -30,6 +31,8 @@ type EventRow = {
   id: string;
   group_id: string;
   payer_id: string | null;
+  payment_profile_id: string | null;
+  management_password_hash: string | null;
   public_token: string;
   title: string;
   description: string;
@@ -37,12 +40,13 @@ type EventRow = {
   updated_at: string;
 };
 
-type GroupPayerRow = {
+type PaymentProfileRow = {
   id: string;
-  group_id: string;
-  name: string;
+  public_token: string;
+  display_name: string;
   paypay_info: string;
   bank_info: string;
+  management_password_hash: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -214,30 +218,35 @@ function validUrl(value: string) {
   }
 }
 
-function parsePayers(body: Record<string, unknown>) {
-  const rawPayers = Array.isArray(body.payers) ? body.payers : [];
-  const payers = rawPayers
+function parsePaymentProfiles(body: Record<string, unknown>) {
+  const rawProfiles = Array.isArray(body.paymentProfiles) ? body.paymentProfiles : Array.isArray(body.payers) ? body.payers : [];
+  return rawProfiles
     .map((item) => {
       const row = asObject(item);
       if (!row) return null;
       return {
         id: text(row.id) || null,
-        name: text(row.name),
+        displayName: text(row.displayName) || text(row.name),
         paypayInfo: optionalText(row.paypayInfo),
-        bankInfo: optionalText(row.bankInfo)
+        bankInfo: optionalText(row.bankInfo),
+        managementPassword: text(row.managementPassword)
       };
     })
-    .filter((payer): payer is NonNullable<typeof payer> => Boolean(payer?.name));
+    .filter((profile): profile is NonNullable<typeof profile> => Boolean(profile?.displayName));
+}
 
-  if (payers.length) return payers;
-
-  const fallback = {
-    id: null,
-    name: text(body.defaultPayeeName),
-    paypayInfo: optionalText(body.defaultPaypayInfo),
-    bankInfo: optionalText(body.defaultBankInfo)
+function serializePaymentProfile(profile: PaymentProfileRow) {
+  return {
+    id: profile.id,
+    publicToken: profile.public_token,
+    displayName: profile.display_name,
+    name: profile.display_name,
+    paypayInfo: profile.paypay_info,
+    bankInfo: profile.bank_info,
+    managementPasswordSet: Boolean(profile.management_password_hash),
+    createdAt: profile.created_at,
+    updatedAt: profile.updated_at
   };
-  return fallback.name ? [fallback] : [];
 }
 
 function eventUrl(env: Bindings, token: string) {
@@ -382,11 +391,12 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
   const event = await db
     .prepare(
       `SELECT e.*, g.name AS group_name, g.public_token AS group_public_token,
-        COALESCE(p.name, g.default_payee_name) AS payee_name,
-        COALESCE(p.paypay_info, g.default_paypay_info) AS paypay_info,
-        COALESCE(p.bank_info, g.default_bank_info) AS bank_info
+        COALESCE(pp.display_name, p.name, g.default_payee_name) AS payee_name,
+        COALESCE(pp.paypay_info, p.paypay_info, g.default_paypay_info) AS paypay_info,
+        COALESCE(pp.bank_info, p.bank_info, g.default_bank_info) AS bank_info
        FROM events e
        JOIN groups g ON g.id = e.group_id
+       LEFT JOIN payment_profiles pp ON pp.id = e.payment_profile_id
        LEFT JOIN group_payers p ON p.id = e.payer_id
        WHERE e.public_token = ?`
     )
@@ -424,7 +434,8 @@ async function buildEventResponse(db: D1Database, eventToken: string) {
     description: event.description,
     groupName: event.group_name,
     groupPublicToken: event.group_public_token,
-    payerId: event.payer_id,
+    payerId: event.payment_profile_id ?? event.payer_id,
+    paymentProfileId: event.payment_profile_id ?? event.payer_id,
     payeeName: event.payee_name,
     paypayInfo: event.paypay_info,
     bankInfo: event.bank_info,
@@ -551,6 +562,111 @@ app.get("/api/slack-destinations", async (c) => {
   );
 });
 
+app.get("/api/payment-profiles", async (c) => {
+  const rows = (
+    await c.env.DB.prepare("SELECT * FROM payment_profiles ORDER BY updated_at DESC, created_at DESC").all<PaymentProfileRow>()
+  ).results;
+  return c.json(rows.map(serializePaymentProfile));
+});
+
+app.post("/api/payment-profiles", async (c) => {
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!body) return jsonError("Invalid JSON");
+
+  const displayName = text(body.displayName) || text(body.name);
+  const paypayInfo = optionalText(body.paypayInfo);
+  const bankInfo = optionalText(body.bankInfo);
+  const managementPassword = text(body.managementPassword);
+  if (!displayName) return jsonError("支払先名を入力してください");
+  if (!paypayInfo && !bankInfo) return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
+  if (managementPassword.length < 6) return jsonError("支払先管理パスワードは6文字以上で入力してください");
+
+  const createdAt = nowIso();
+  const profile: PaymentProfileRow = {
+    id: id(),
+    public_token: publicToken(),
+    display_name: displayName,
+    paypay_info: paypayInfo,
+    bank_info: bankInfo,
+    management_password_hash: await hashPassword(managementPassword),
+    created_at: createdAt,
+    updated_at: createdAt
+  };
+  await c.env.DB.prepare(
+    `INSERT INTO payment_profiles
+     (id, public_token, display_name, paypay_info, bank_info, management_password_hash, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    profile.id,
+    profile.public_token,
+    profile.display_name,
+    profile.paypay_info,
+    profile.bank_info,
+    profile.management_password_hash,
+    profile.created_at,
+    profile.updated_at
+  ).run();
+
+  return c.json(serializePaymentProfile(profile), 201);
+});
+
+app.patch("/api/payment-profiles/:id", async (c) => {
+  const profile = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(c.req.param("id"))
+    .first<PaymentProfileRow>();
+  if (!profile) return jsonError("支払先が見つかりません", 404);
+
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!body) return jsonError("Invalid JSON");
+  const managementPassword = text(body.managementPassword);
+  const newManagementPassword = text(body.newManagementPassword);
+  if (profile.management_password_hash) {
+    if (!(await passwordMatches(managementPassword, profile.management_password_hash))) {
+      return jsonError("支払先管理パスワードが違います", 403);
+    }
+  } else if (newManagementPassword.length < 6) {
+    return jsonError("この支払先には管理パスワードが未設定です。6文字以上の新しい管理パスワードを設定してください");
+  }
+
+  const displayName = text(body.displayName) || text(body.name);
+  const paypayInfo = optionalText(body.paypayInfo);
+  const bankInfo = optionalText(body.bankInfo);
+  if (!displayName) return jsonError("支払先名を入力してください");
+  if (!paypayInfo && !bankInfo) return jsonError("PayPay送金先情報、または振込先情報のどちらかを入力してください");
+  const nextPasswordHash =
+    newManagementPassword.length >= 6 ? await hashPassword(newManagementPassword) : profile.management_password_hash;
+  const updatedAt = nowIso();
+  await c.env.DB.prepare(
+    `UPDATE payment_profiles
+     SET display_name = ?, paypay_info = ?, bank_info = ?, management_password_hash = ?, updated_at = ?
+     WHERE id = ?`
+  ).bind(displayName, paypayInfo, bankInfo, nextPasswordHash, updatedAt, profile.id).run();
+
+  const updated = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(profile.id)
+    .first<PaymentProfileRow>();
+  return c.json(serializePaymentProfile(updated!));
+});
+
+app.delete("/api/payment-profiles/:id", async (c) => {
+  const profile = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(c.req.param("id"))
+    .first<PaymentProfileRow>();
+  if (!profile) return jsonError("支払先が見つかりません", 404);
+  const body = asObject(await c.req.json().catch(() => null));
+  if (!(await passwordMatches(text(body?.managementPassword), profile.management_password_hash))) {
+    return jsonError("支払先管理パスワードが違います", 403);
+  }
+  const used = await c.env.DB.prepare(
+    `SELECT id FROM events WHERE payment_profile_id = ?
+     UNION SELECT id FROM groups WHERE default_payment_profile_id = ?
+     LIMIT 1`
+  ).bind(profile.id, profile.id).first<{ id: string }>();
+  if (used) return jsonError("グループまたはイベントで使われている支払先は削除できません");
+  await c.env.DB.prepare("DELETE FROM payment_profiles WHERE id = ?").bind(profile.id).run();
+  return c.json({ ok: true });
+});
+
 app.get("/api/groups", async (c) => {
   const rows = (
     await c.env.DB.prepare(
@@ -593,8 +709,8 @@ app.post("/api/groups", async (c) => {
   if (!body) return jsonError("Invalid JSON");
 
   const name = text(body.name);
-  const payers = parsePayers(body);
-  const primaryPayer = payers[0];
+  const newProfiles = parsePaymentProfiles(body);
+  let defaultPaymentProfileId = text(body.defaultPaymentProfileId) || text(body.payerId) || null;
   const managementPassword = text(body.managementPassword);
   const slackDestinationId = text(body.slackDestinationId) || null;
   const members = Array.isArray(body.members)
@@ -616,11 +732,14 @@ app.post("/api/groups", async (c) => {
   if (!name) {
     return jsonError("グループ名を入力してください");
   }
-  if (!payers.length) {
-    return jsonError("建て替え者を1人以上入力してください");
+  if (!defaultPaymentProfileId && !newProfiles.length) {
+    return jsonError("デフォルト支払先を選択、または新規作成してください");
   }
-  if (payers.some((payer) => !payer.paypayInfo && !payer.bankInfo)) {
-    return jsonError("建て替え者ごとにPayPay送金先情報、または振込先情報のどちらかを入力してください");
+  if (newProfiles.some((profile) => !profile.paypayInfo && !profile.bankInfo)) {
+    return jsonError("支払先ごとにPayPay送金先情報、または振込先情報のどちらかを入力してください");
+  }
+  if (newProfiles.some((profile) => !profile.id && profile.managementPassword.length < 6)) {
+    return jsonError("新しい支払先の管理パスワードは6文字以上で入力してください");
   }
   if (managementPassword.length < 6) {
     return jsonError("管理パスワードは6文字以上で入力してください");
@@ -634,31 +753,64 @@ app.post("/api/groups", async (c) => {
     if (!destination) return jsonError("Slack通知先が見つかりません", 404);
   }
 
+  const createdProfiles: PaymentProfileRow[] = [];
+  for (const profile of newProfiles.filter((profile) => !profile.id)) {
+    const createdAt = nowIso();
+    createdProfiles.push({
+      id: id(),
+      public_token: publicToken(),
+      display_name: profile.displayName,
+      paypay_info: profile.paypayInfo,
+      bank_info: profile.bankInfo,
+      management_password_hash: await hashPassword(profile.managementPassword),
+      created_at: createdAt,
+      updated_at: createdAt
+    });
+  }
+  if (!defaultPaymentProfileId) defaultPaymentProfileId = createdProfiles[0]?.id ?? null;
+  const defaultProfile = defaultPaymentProfileId
+    ? await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?").bind(defaultPaymentProfileId).first<PaymentProfileRow>()
+    : createdProfiles[0];
+  const selectedDefaultProfile = defaultProfile ?? createdProfiles.find((profile) => profile.id === defaultPaymentProfileId);
+  if (!selectedDefaultProfile) return jsonError("デフォルト支払先が見つかりません", 404);
+
   const groupId = id();
   const token = publicToken();
   const createdAt = nowIso();
   const passwordHash = await hashPassword(managementPassword);
   const statements = [
+    ...createdProfiles.map((profile) =>
+      c.env.DB.prepare(
+        `INSERT INTO payment_profiles
+         (id, public_token, display_name, paypay_info, bank_info, management_password_hash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        profile.id,
+        profile.public_token,
+        profile.display_name,
+        profile.paypay_info,
+        profile.bank_info,
+        profile.management_password_hash,
+        profile.created_at,
+        profile.updated_at
+      )
+    ),
     c.env.DB.prepare(
       `INSERT INTO groups
-       (id, public_token, name, default_payee_name, default_paypay_info, default_bank_info, management_password_hash, slack_destination_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, public_token, name, default_payee_name, default_paypay_info, default_bank_info, default_payment_profile_id, management_password_hash, slack_destination_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       groupId,
       token,
       name,
-      primaryPayer.name,
-      primaryPayer.paypayInfo,
-      primaryPayer.bankInfo,
+      selectedDefaultProfile.display_name,
+      selectedDefaultProfile.paypay_info,
+      selectedDefaultProfile.bank_info,
+      selectedDefaultProfile.id,
       passwordHash,
       slackDestinationId,
       createdAt,
       createdAt
-    ),
-    ...payers.map((payer) =>
-      c.env.DB.prepare(
-        "INSERT INTO group_payers (id, group_id, name, paypay_info, bank_info, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).bind(id(), groupId, payer.name, payer.paypayInfo, payer.bankInfo, createdAt, createdAt)
     ),
     ...members.map((member) =>
       c.env.DB.prepare(
@@ -691,8 +843,7 @@ app.patch("/api/groups/:groupToken", async (c) => {
   }
 
   const name = text(body.name);
-  const payers = parsePayers(body);
-  const primaryPayer = payers[0];
+  const defaultPaymentProfileId = text(body.defaultPaymentProfileId) || text(body.payerId);
   const slackDestinationId = text(body.slackDestinationId) || null;
   const members = Array.isArray(body.members)
     ? body.members
@@ -710,10 +861,7 @@ app.patch("/api/groups/:groupToken", async (c) => {
     : [];
 
   if (!name) return jsonError("グループ名を入力してください");
-  if (!payers.length) return jsonError("建て替え者を1人以上入力してください");
-  if (payers.some((payer) => !payer.paypayInfo && !payer.bankInfo)) {
-    return jsonError("建て替え者ごとにPayPay送金先情報、または振込先情報のどちらかを入力してください");
-  }
+  if (!defaultPaymentProfileId) return jsonError("デフォルト支払先を選択してください");
   if (members.length < 1) return jsonError("メンバーを1人以上入力してください");
   if (slackDestinationId) {
     const destination = await c.env.DB.prepare("SELECT id FROM slack_destinations WHERE id = ?")
@@ -721,6 +869,10 @@ app.patch("/api/groups/:groupToken", async (c) => {
       .first();
     if (!destination) return jsonError("Slack通知先が見つかりません", 404);
   }
+  const defaultProfile = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(defaultPaymentProfileId)
+    .first<PaymentProfileRow>();
+  if (!defaultProfile) return jsonError("デフォルト支払先が見つかりません", 404);
 
   const updatedAt = nowIso();
   const nextPasswordHash =
@@ -730,37 +882,19 @@ app.patch("/api/groups/:groupToken", async (c) => {
       .bind(group.id)
       .all<{ id: string }>()
   ).results;
-  const existingPayers = (
-    await c.env.DB.prepare("SELECT id FROM group_payers WHERE group_id = ?")
-      .bind(group.id)
-      .all<{ id: string }>()
-  ).results;
   const incomingExistingIds = new Set(members.map((member) => member.id).filter(Boolean));
-  const incomingPayerIds = new Set(payers.map((payer) => payer.id).filter(Boolean));
-  const deletingPayerIds = existingPayers.filter((payer) => !incomingPayerIds.has(payer.id)).map((payer) => payer.id);
-  if (deletingPayerIds.length) {
-    const used = (
-      await c.env.DB.prepare(
-        `SELECT payer_id FROM events
-         WHERE group_id = ? AND payer_id IN (${deletingPayerIds.map(() => "?").join(",")})
-         LIMIT 1`
-      )
-        .bind(group.id, ...deletingPayerIds)
-        .first<{ payer_id: string }>()
-    );
-    if (used) return jsonError("イベントで使われている建て替え者は削除できません");
-  }
   const statements: D1PreparedStatement[] = [
     c.env.DB.prepare(
       `UPDATE groups
-       SET name = ?, default_payee_name = ?, default_paypay_info = ?, default_bank_info = ?,
+       SET name = ?, default_payee_name = ?, default_paypay_info = ?, default_bank_info = ?, default_payment_profile_id = ?,
            management_password_hash = ?, slack_destination_id = ?, updated_at = ?
        WHERE id = ?`
     ).bind(
       name,
-      primaryPayer.name,
-      primaryPayer.paypayInfo,
-      primaryPayer.bankInfo,
+      defaultProfile.display_name,
+      defaultProfile.paypay_info,
+      defaultProfile.bank_info,
+      defaultProfile.id,
       nextPasswordHash,
       slackDestinationId,
       updatedAt,
@@ -769,19 +903,6 @@ app.patch("/api/groups/:groupToken", async (c) => {
     ...existing
       .filter((member) => !incomingExistingIds.has(member.id))
       .map((member) => c.env.DB.prepare("DELETE FROM group_members WHERE id = ? AND group_id = ?").bind(member.id, group.id)),
-    ...existingPayers
-      .filter((payer) => !incomingPayerIds.has(payer.id))
-      .map((payer) => c.env.DB.prepare("DELETE FROM group_payers WHERE id = ? AND group_id = ?").bind(payer.id, group.id)),
-    ...payers.map((payer) => {
-      if (payer.id) {
-        return c.env.DB.prepare(
-          "UPDATE group_payers SET name = ?, paypay_info = ?, bank_info = ?, updated_at = ? WHERE id = ? AND group_id = ?"
-        ).bind(payer.name, payer.paypayInfo, payer.bankInfo, updatedAt, payer.id, group.id);
-      }
-      return c.env.DB.prepare(
-        "INSERT INTO group_payers (id, group_id, name, paypay_info, bank_info, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).bind(id(), group.id, payer.name, payer.paypayInfo, payer.bankInfo, updatedAt, updatedAt);
-    }),
     ...members.map((member) => {
       if (member.id) {
         return c.env.DB.prepare(
@@ -828,10 +949,9 @@ app.get("/api/groups/:groupToken", async (c) => {
       .bind(group.id)
       .all<GroupMemberRow>()
   ).results;
-  const payers = (
-    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
-      .bind(group.id)
-      .all<GroupPayerRow>()
+  const paymentProfiles = (
+    await c.env.DB.prepare("SELECT * FROM payment_profiles ORDER BY updated_at DESC, created_at DESC")
+      .all<PaymentProfileRow>()
   ).results;
   const events = (
     await c.env.DB.prepare(
@@ -863,27 +983,9 @@ app.get("/api/groups/:groupToken", async (c) => {
     defaultPayeeName: group.default_payee_name,
     defaultPaypayInfo: group.default_paypay_info,
     defaultBankInfo: group.default_bank_info,
-    payers: (payers.length
-      ? payers
-      : [
-          {
-            id: "",
-            group_id: group.id,
-            name: group.default_payee_name,
-            paypay_info: group.default_paypay_info,
-            bank_info: group.default_bank_info,
-            created_at: group.created_at,
-            updated_at: group.updated_at
-          }
-        ]
-    ).map((payer) => ({
-      id: payer.id,
-      name: payer.name,
-      paypayInfo: payer.paypay_info,
-      bankInfo: payer.bank_info,
-      createdAt: payer.created_at,
-      updatedAt: payer.updated_at
-    })),
+    defaultPaymentProfileId: group.default_payment_profile_id,
+    paymentProfiles: paymentProfiles.map(serializePaymentProfile),
+    payers: paymentProfiles.map(serializePaymentProfile),
     managementPasswordSet: Boolean(group.management_password_hash),
     slackDestination: group.slack_destination_id
       ? {
@@ -922,11 +1024,14 @@ app.post("/api/groups/:groupToken/events", async (c) => {
 
   const title = text(body.title);
   const description = optionalText(body.description);
-  const payerId = text(body.payerId);
+  const paymentProfileId = text(body.paymentProfileId) || text(body.payerId) || group.default_payment_profile_id || "";
+  const eventManagementPassword = text(body.eventManagementPassword) || text(body.managementPassword);
   const memberAmounts = Array.isArray(body.memberAmounts) ? body.memberAmounts : [];
   const extraMembers = Array.isArray(body.extraMembers) ? body.extraMembers : [];
   const paypayLinks = Array.isArray(body.paypayLinks) ? body.paypayLinks : [];
   if (!title) return jsonError("イベント名を入力してください");
+  if (!paymentProfileId) return jsonError("支払先を選択してください");
+  if (eventManagementPassword.length < 6) return jsonError("イベント管理パスワードは6文字以上で入力してください");
   if (memberAmounts.length < 1) return jsonError("メンバー金額を入力してください");
 
   const members = (
@@ -934,13 +1039,10 @@ app.post("/api/groups/:groupToken/events", async (c) => {
       .bind(group.id)
       .all<GroupMemberRow>()
   ).results;
-  const payers = (
-    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
-      .bind(group.id)
-      .all<GroupPayerRow>()
-  ).results;
-  const selectedPayer = payerId ? payers.find((payer) => payer.id === payerId) : payers[0];
-  if (payers.length && !selectedPayer) return jsonError("建て替え者が見つかりません", 404);
+  const selectedProfile = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(paymentProfileId)
+    .first<PaymentProfileRow>();
+  if (!selectedProfile) return jsonError("支払先が見つかりません", 404);
   const memberMap = new Map(members.map((member) => [member.id, member]));
   const parsedAmounts: {
     memberId: string | null;
@@ -1011,10 +1113,11 @@ app.post("/api/groups/:groupToken/events", async (c) => {
   const eventId = id();
   const token = publicToken();
   const createdAt = nowIso();
+  const eventPasswordHash = await hashPassword(eventManagementPassword);
   const eventStatement = c.env.DB.prepare(
-    `INSERT INTO events (id, group_id, payer_id, public_token, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(eventId, group.id, selectedPayer?.id ?? null, token, title, description, createdAt, createdAt);
+    `INSERT INTO events (id, group_id, payer_id, payment_profile_id, management_password_hash, public_token, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(eventId, group.id, selectedProfile.id, selectedProfile.id, eventPasswordHash, token, title, description, createdAt, createdAt);
   const memberStatements = parsedAmounts.map((item) => {
     return c.env.DB.prepare(
       `INSERT INTO event_members
@@ -1064,27 +1167,25 @@ app.get("/api/events/:eventToken", async (c) => {
 
 app.patch("/api/events/:eventToken", async (c) => {
   const event = await c.env.DB.prepare(
-    `SELECT e.*, g.management_password_hash
-     FROM events e
-     JOIN groups g ON g.id = e.group_id
-     WHERE e.public_token = ?`
+    "SELECT * FROM events WHERE public_token = ?"
   )
     .bind(c.req.param("eventToken"))
-    .first<EventRow & { management_password_hash: string | null }>();
+    .first<EventRow>();
   if (!event) return jsonError("イベントが見つかりません", 404);
 
   const body = asObject(await c.req.json().catch(() => null));
   if (!body) return jsonError("Invalid JSON");
   if (!(await passwordMatches(text(body.managementPassword), event.management_password_hash))) {
-    return jsonError("管理パスワードが違います", 403);
+    return jsonError("イベント管理パスワードが違います", 403);
   }
 
   const title = text(body.title);
   const description = optionalText(body.description);
-  const payerId = text(body.payerId);
+  const paymentProfileId = text(body.paymentProfileId) || text(body.payerId) || event.payment_profile_id || event.payer_id || "";
   const members = Array.isArray(body.members) ? body.members : [];
   const paypayLinks = Array.isArray(body.paypayLinks) ? body.paypayLinks : [];
   if (!title) return jsonError("イベント名を入力してください");
+  if (!paymentProfileId) return jsonError("支払先を選択してください");
   if (members.length < 1) return jsonError("参加メンバーを1人以上入力してください");
 
   const currentMembers = (
@@ -1099,13 +1200,10 @@ app.patch("/api/events/:eventToken", async (c) => {
       .all<GroupMemberRow>()
   ).results;
   const groupMemberMap = new Map(groupMembers.map((member) => [member.id, member]));
-  const payers = (
-    await c.env.DB.prepare("SELECT * FROM group_payers WHERE group_id = ? ORDER BY created_at ASC")
-      .bind(event.group_id)
-      .all<GroupPayerRow>()
-  ).results;
-  const selectedPayer = payerId ? payers.find((payer) => payer.id === payerId) : payers[0];
-  if (payers.length && !selectedPayer) return jsonError("建て替え者が見つかりません", 404);
+  const selectedProfile = await c.env.DB.prepare("SELECT * FROM payment_profiles WHERE id = ?")
+    .bind(paymentProfileId)
+    .first<PaymentProfileRow>();
+  if (!selectedProfile) return jsonError("支払先が見つかりません", 404);
 
   const parsedMembers: {
     id: string | null;
@@ -1174,8 +1272,9 @@ app.patch("/api/events/:eventToken", async (c) => {
   const updatedAt = nowIso();
   const incomingIds = new Set(parsedMembers.map((member) => member.id).filter(Boolean));
   const statements: D1PreparedStatement[] = [
-    c.env.DB.prepare("UPDATE events SET payer_id = ?, title = ?, description = ?, updated_at = ? WHERE id = ?").bind(
-      selectedPayer?.id ?? null,
+    c.env.DB.prepare("UPDATE events SET payer_id = ?, payment_profile_id = ?, title = ?, description = ?, updated_at = ? WHERE id = ?").bind(
+      selectedProfile.id,
+      selectedProfile.id,
       title,
       description,
       updatedAt,
@@ -1238,18 +1337,13 @@ app.patch("/api/events/:eventToken", async (c) => {
 });
 
 app.delete("/api/events/:eventToken", async (c) => {
-  const event = await c.env.DB.prepare(
-    `SELECT e.*, g.management_password_hash
-     FROM events e
-     JOIN groups g ON g.id = e.group_id
-     WHERE e.public_token = ?`
-  )
+  const event = await c.env.DB.prepare("SELECT * FROM events WHERE public_token = ?")
     .bind(c.req.param("eventToken"))
-    .first<EventRow & { management_password_hash: string | null }>();
+    .first<EventRow>();
   if (!event) return jsonError("イベントが見つかりません", 404);
   const body = asObject(await c.req.json().catch(() => null));
   if (!(await passwordMatches(text(body?.managementPassword), event.management_password_hash))) {
-    return jsonError("管理パスワードが違います", 403);
+    return jsonError("イベント管理パスワードが違います", 403);
   }
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM slack_notification_logs WHERE event_id = ?").bind(event.id),

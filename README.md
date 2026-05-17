@@ -24,12 +24,11 @@ Workers 1本で React SPA の静的配信、Hono API、Cron Trigger をまとめ
 - Slackユーザー選択とメンション
 - Slack外メンバーの手入力追加
 - トップ画面からグループ一覧へ遷移
-- 複数の建て替え者・PayPay送金先情報登録
+- 支払先プロフィール登録
 - 振込先情報登録（任意）
-- グループごとの管理パスワード
-- 管理パスワードによるグループ編集・削除
+- グループ、イベント、支払先ごとの管理パスワード
 - 3ステップのイベント作成
-- イベントごとの建て替え者選択
+- イベントごとの支払先選択
 - イベントごとの参加メンバー選択とゲスト追加
 - 金額単位のPayPay支払いリンク登録
 - 同額メンバーで1リンク共有
@@ -126,6 +125,10 @@ Cloudflare CronはUTC指定のため、`0 1 * * *` は日本時間10:00です。
 
 - `POST /api/slack-destinations`
 - `GET /api/slack-destinations`
+- `GET /api/payment-profiles`
+- `POST /api/payment-profiles`
+- `PATCH /api/payment-profiles/:id`
+- `DELETE /api/payment-profiles/:id`
 - `POST /api/groups`
 - `GET /api/groups/:groupToken`
 - `POST /api/groups/:groupToken/events`
@@ -140,7 +143,9 @@ PayPay API連携やApp Invokeはしていません。ハラッタ？では、ユ
 
 リンク未登録、期限切れ、リンクが使えない場合でも、PayPay送金先情報と金額コピーから支払える導線を残しています。
 
-グループには複数の建て替え者を登録できます。イベント作成時に誰が建て替えたかを選ぶと、その人のPayPay送金先情報と振込先情報がイベントページに表示されます。
+支払先プロフィールはグループから独立しています。グループはデフォルト支払先を1つ持ち、イベント作成時に必要なら別の支払先を選べます。
+
+グループ管理パスワード、イベント管理パスワード、支払先管理パスワードは別です。グループ編集、イベント編集、支払先編集をそれぞれ別の権限として扱います。
 
 PayPay送金先情報には、PayPay ID、電話番号、PayPayプロフィールURLなど、支払う人が送金先を特定できる情報を入れてください。
 
