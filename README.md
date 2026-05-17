@@ -39,6 +39,9 @@ Workers 1本で React SPA の静的配信、Hono API、Cron Trigger をまとめ
 - 毎日10時JSTの未払いリマインド
 - 全員支払い完了時のSlack通知
 - Webhook URLを一覧/APIレスポンスへ返さない
+- Workers側の日本国外アクセスブロック
+- クローラ/AI bot系User-Agentブロック
+- `/api/*` の軽いIP単位レート制限
 
 ## セットアップ
 
@@ -154,6 +157,16 @@ Bot tokenは任意です。未設定でもSlackにいない人を名前で追加
 - `users:read`
 
 通知本文ではSlackユーザーIDがあるメンバーを `<@USERID>` 形式でメンションします。
+
+## セキュリティ
+
+Cloudflare Workers側で、日本以外からのアクセス、クローラ/AI bot系User-Agent、APIへの短時間連続アクセスを制限しています。
+
+Cloudflare Freeプランで追加設定する場合は、ダッシュボードで以下も有効化してください。
+
+- Security Settings > Bot traffic > Bot Fight Mode: On
+- Security Settings > Bot traffic > Block AI bots: Block on all pages
+- Security > WAF > Custom rules: `haratta.andex.tokyo` かつ日本以外を Managed Challenge
 
 ## グループURLと管理パスワード
 

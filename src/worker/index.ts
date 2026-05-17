@@ -7,6 +7,10 @@ type Bindings = {
   APP_BASE_URL: string;
 };
 
+type CfProperties = {
+  country?: string;
+};
+
 type GroupRow = {
   id: string;
   public_token: string;
@@ -84,6 +88,74 @@ type GroupMemberRow = {
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+const CRAWLER_USER_AGENT_PATTERN =
+  /(bot|crawler|spider|scrapy|slurp|ahrefs|semrush|mj12|dotbot|bytespider|gptbot|claudebot|perplexity|ccbot|facebookexternalhit|twitterbot|discordbot|slackbot|linebot|embedly|preview|wget|curl|python-requests)/i;
+const API_RATE_LIMIT = 60;
+const API_RATE_WINDOW_SECONDS = 60;
+
+function securityResponse(message: string, status: number, path: string) {
+  if (path.startsWith("/api/")) {
+    return jsonError(message, status);
+  }
+  return new Response(message, {
+    status,
+    headers: { "content-type": "text/plain; charset=utf-8" }
+  });
+}
+
+async function sha256Hex(value: string) {
+  const data = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function overApiRateLimit(db: D1Database, request: Request) {
+  if (request.method === "OPTIONS") return false;
+  const ip = request.headers.get("CF-Connecting-IP") ?? request.headers.get("x-forwarded-for") ?? "unknown";
+  const now = new Date();
+  const bucket = Math.floor(now.getTime() / (API_RATE_WINDOW_SECONDS * 1000));
+  const key = `${bucket}:${await sha256Hex(ip)}`;
+  const resetAt = new Date((bucket + 1) * API_RATE_WINDOW_SECONDS * 1000).toISOString();
+  const updatedAt = now.toISOString();
+  const current = await db
+    .prepare("SELECT count FROM security_rate_limits WHERE key = ?")
+    .bind(key)
+    .first<{ count: number }>();
+  const nextCount = (current?.count ?? 0) + 1;
+  if (current) {
+    await db.prepare("UPDATE security_rate_limits SET count = ?, updated_at = ? WHERE key = ?").bind(nextCount, updatedAt, key).run();
+  } else {
+    await db
+      .prepare("INSERT INTO security_rate_limits (key, count, reset_at, updated_at) VALUES (?, ?, ?, ?)")
+      .bind(key, nextCount, resetAt, updatedAt)
+      .run();
+    if (Math.random() < 0.02) {
+      await db.prepare("DELETE FROM security_rate_limits WHERE reset_at < ?").bind(updatedAt).run();
+    }
+  }
+  return nextCount > API_RATE_LIMIT;
+}
+
+app.use("*", async (c, next) => {
+  const url = new URL(c.req.url);
+  const cf = c.req.raw.cf as CfProperties | undefined;
+  const country = cf?.country;
+  if (country && country !== "JP") {
+    return securityResponse("Access is limited to Japan.", 403, url.pathname);
+  }
+
+  const userAgent = c.req.header("user-agent") ?? "";
+  if (userAgent && CRAWLER_USER_AGENT_PATTERN.test(userAgent)) {
+    return securityResponse("Crawler access is blocked.", 403, url.pathname);
+  }
+
+  if (url.pathname.startsWith("/api/") && (await overApiRateLimit(c.env.DB, c.req.raw))) {
+    return securityResponse("Too many requests.", 429, url.pathname);
+  }
+
+  await next();
+});
 
 app.use("/api/*", cors());
 
