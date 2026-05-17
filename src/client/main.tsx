@@ -801,6 +801,9 @@ function NewGroup() {
               </option>
             ))}
           </select>
+          <button type="button" className="self-start text-xs font-bold text-leaf underline" onClick={() => go("/slack-destinations/new")}>
+            Slack通知先を追加
+          </button>
         </Field>
         <Field label="デフォルト支払先" hint="イベント作成時の初期支払先です。支払先はトップの「支払先」から作成できます。">
           <select className={inputClass()} value={form.defaultPaymentProfileId} onChange={(e) => setForm({ ...form, defaultPaymentProfileId: e.target.value })}>
@@ -808,6 +811,9 @@ function NewGroup() {
               <option key={profile.id} value={profile.id}>{profile.displayName}</option>
             ))}
           </select>
+          <button type="button" className="self-start text-xs font-bold text-leaf underline" onClick={() => go("/payment-profiles")}>
+            支払先を追加
+          </button>
         </Field>
         {paymentProfiles.length === 0 ? (
           <Button type="button" variant="secondary" onClick={() => go("/payment-profiles")}>
@@ -1107,6 +1113,9 @@ function EventWizard({
                 <option key={payer.id || payer.name} value={payer.id}>{payer.displayName}</option>
               ))}
             </select>
+            <button type="button" className="self-start text-xs font-bold text-leaf underline" onClick={() => go("/payment-profiles")}>
+              支払先を追加
+            </button>
           </Field>
           {paymentProfiles.length === 0 ? (
             <Button type="button" variant="secondary" onClick={() => go("/payment-profiles")}>
